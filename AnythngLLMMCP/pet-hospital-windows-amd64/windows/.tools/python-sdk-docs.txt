@@ -1,0 +1,14370 @@
+# MCP Python SDK
+
+Source: https://py.sdk.modelcontextprotocol.io/
+
+!!! info "This documents v2, the current stable release line"
+    New to v2, or coming from v1? **[What's new in v2](https://py.sdk.modelcontextprotocol.io/whats-new/index.md)** is the five-minute tour of what changed, and the **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md)** covers every breaking change.
+    Still on v1.x? Its documentation lives at the [v1.x docs](https://py.sdk.modelcontextprotocol.io/v1/).
+    Something rough or confusing? [Tell us](https://github.com/modelcontextprotocol/python-sdk/issues/new?template=v2-feedback.yaml).
+
+The **Model Context Protocol (MCP)** lets applications provide context to LLMs in a standardized way, separating the concern of *providing* context from the LLM interaction itself.
+
+This is the official Python SDK for it. With it you can:
+
+* **Build MCP servers** that expose tools, resources, and prompts to any MCP host.
+* **Build MCP clients** that connect to any MCP server.
+* Speak every standard transport: stdio, Streamable HTTP, and SSE.
+
+## Requirements
+
+Python 3.10+.
+
+## Installation
+
+=== "uv"
+
+    ```bash
+    uv add "mcp[cli]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "mcp[cli]"
+    ```
+
+The `[cli]` extra gives you the `mcp` command; you'll want it for development.
+See [Installation](https://py.sdk.modelcontextprotocol.io/get-started/installation/index.md) for what each dependency is for.
+
+## Example
+
+### Create it
+
+Create a file `server.py`:
+
+```python title="server.py"
+# docs_src/index/tutorial001.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Demo")
+
+
+@mcp.tool()
+def add(a: int, b: int) -> int:
+    """Add two numbers."""
+    return a + b
+
+
+@mcp.resource("greeting://{name}")
+def greeting(name: str) -> str:
+    """Greet someone by name."""
+    return f"Hello, {name}!"
+```
+
+That's a complete MCP server.
+
+It exposes one **tool**, `add`, and one templated **resource**, `greeting://{name}`.
+
+### Run it
+
+```console
+uv run mcp dev server.py
+```
+
+This starts your server and opens the [MCP Inspector](https://github.com/modelcontextprotocol/inspector), an interactive UI for poking at it. Open the URL it prints.
+
+!!! note
+    The Inspector is a Node.js app, so `mcp dev` needs `npx` on your `PATH`.
+
+### Try it
+
+In the Inspector, go to **Tools** and call `add` with `a=1`, `b=2`.
+
+You get `3` back. ✨
+
+The Inspector built that form (a required integer field for `a`, another for `b`) from your type hints. So will Claude, and every other MCP host.
+
+Now go to **Resources** and read `greeting://World`:
+
+```text
+Hello, World!
+```
+
+### Recap
+
+Look again at what you did **not** write:
+
+* No JSON Schema. `a: int, b: int` *is* the schema.
+* No request parsing, no serialization, no validation code.
+* No protocol handling at all.
+
+You wrote two Python functions with type hints and a docstring. The SDK does the rest.
+
+## Where to go next
+
+* **[Get started](https://py.sdk.modelcontextprotocol.io/get-started/index.md)** takes you from install to a working, tested server.
+* Building an application that *uses* MCP servers? Start with **[Clients](https://py.sdk.modelcontextprotocol.io/client/index.md)**.
+* Already have a FastAPI or Starlette app? **[Add to an existing app](https://py.sdk.modelcontextprotocol.io/run/asgi/index.md)** mounts an MCP server inside it.
+* Hunting an exact error message? **[Troubleshooting](https://py.sdk.modelcontextprotocol.io/troubleshooting/index.md)** is keyed by the verbatim text.
+* Wondering what changed in v2? **[What's new in v2](https://py.sdk.modelcontextprotocol.io/whats-new/index.md)** is the five-minute tour.
+* Migrating from v1? Start with the **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md)**.
+* Hunting for an exact signature? The **[API Reference](https://py.sdk.modelcontextprotocol.io/api/mcp/)** is generated from the source.
+* Reading with an LLM? This documentation is also published in the [llms.txt](https://llmstxt.org/) format:
+  [llms.txt](https://py.sdk.modelcontextprotocol.io/llms.txt) is an index of the pages, and
+  [llms-full.txt](https://py.sdk.modelcontextprotocol.io/llms-full.txt) contains every page in a single file.
+
+# What's new in v2
+
+Source: https://py.sdk.modelcontextprotocol.io/whats-new/
+
+Two things happened at once in v2. The **SDK was rebuilt**: a new engine under both the client and the server, a first-class `Client`, and a set of renames that a v1 codebase meets on its first import. And the **protocol moved**: v2 speaks the 2026-07-28 revision of MCP, which removes the connection handshake, the session, and every server-initiated request, without stranding the clients you already have.
+
+This page is the tour of both halves, one section per headline, each ending in the page that owns the topic. It is not the porting manual. That is the **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md)**: every breaking change, with before and after code.
+
+!!! note "v2 is the stable line"
+    `pip install mcp` installs 2.x, and **[Installation](https://py.sdk.modelcontextprotocol.io/get-started/installation/index.md)** has the
+    copy-paste install line. If anything in v2 breaks, surprises, or slows you down,
+    [tell us](https://github.com/modelcontextprotocol/python-sdk/issues/new?template=v2-feedback.yaml).
+
+## The SDK: v1 to v2
+
+### `FastMCP` is now `MCPServer`
+
+The high-level server class was renamed, and its module with it. This is the first thing every v1 server hits, because the old import path is gone rather than deprecated:
+
+```python
+from mcp.server import MCPServer  # v1: from mcp.server.fastmcp import FastMCP
+
+mcp = MCPServer("Demo")  # v1: FastMCP("Demo")
+```
+
+It is also, for a decorator-built server, most of the port. `@mcp.tool()`, `@mcp.resource()`, and `@mcp.prompt()` accept what they accepted in v1 (`@mcp.resource()` adds one optional `security=` keyword), and the input schema still comes from your type hints. Around the edges: everything under `mcp.server.fastmcp.*` now lives under `mcp.server.mcpserver.*`, `ctx.fastmcp` is `ctx.mcp_server`, `get_context()` is gone (declare a `ctx: Context` parameter instead), and the exception base `FastMCPError` is `MCPServerError`. The **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md#fastmcp-renamed-to-mcpserver)** has the import table.
+
+### `Resolve`: the new way to ask the user for input
+
+Not everything a tool needs should come from the model. New in v2, a tool parameter annotated with `Resolve(fn)` is filled by a function you write instead, invisibly to the model, and that function can return `Elicit(...)` to put a question in front of the user. This is the preferred way to get anything from the client mid-call: the SDK carries the question over whichever mechanism the connection supports (a live elicitation request for a legacy client, a multi-round-trip on 2026-07-28), so one tool body serves both eras. **[Dependencies](https://py.sdk.modelcontextprotocol.io/handlers/dependencies/index.md)** is the page.
+
+!!! note
+    The other two forms remain when you need them: `ctx.elicit()` still works for clients on
+    legacy connections (**[Elicitation](https://py.sdk.modelcontextprotocol.io/handlers/elicitation/index.md)**), and a handler can return an
+    `InputRequiredResult` itself and drive the rounds by hand, which is also how sampling and
+    roots requests travel at 2026-07-28 (**[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**).
+
+### A first-class `Client`
+
+v1 handed you three nested layers: a transport context manager yielding raw streams, a `ClientSession` wrapped around them, and a hand-called `await session.initialize()`. v2 has one object:
+
+```python title="client.py" hl_lines="7-11"
+# docs_src/client/tutorial001_client.py
+import anyio
+
+from mcp import Client
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        print(client.server_info)
+        print(client.server_capabilities)
+        print(client.protocol_version)
+        print(client.instructions)
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+`Client` takes a URL (Streamable HTTP), a `StdioServerParameters` (a stdio subprocess), any other transport context manager such as `sse_client(...)`, or, in tests, the server object itself (in memory, no transport). Entering `async with` connects and negotiates the protocol version, whichever era the server speaks; `client.server_capabilities` and `client.protocol_version` are simply there afterwards, and `client.server_info` is too when the server identifies itself (it is `Implementation | None` now, since 2026-era identity is optional). The sampling and elicitation callbacks you registered in v1 still work (their bodies see the same snake_case attribute rename as everything else on this page), they now also answer the 2026-style requests-inside-results (below), and they run concurrently instead of one at a time. `ClientSession` is still underneath for anyone who wants the low-level surface, and `client.session` hands it to you; it moved too (it runs on the new dispatcher engine, and some of its own signatures changed), so read the **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md#clientsession-now-runs-on-jsonrpcdispatcher-basesession-removed)** before you drop down.
+
+**[The Client](https://py.sdk.modelcontextprotocol.io/client/index.md)** introduces it, **[Client transports](https://py.sdk.modelcontextprotocol.io/client/transports/index.md)** covers the four connection forms, **[Client callbacks](https://py.sdk.modelcontextprotocol.io/client/callbacks/index.md)** covers the callbacks themselves, and **[Testing](https://py.sdk.modelcontextprotocol.io/get-started/testing/index.md)** shows the in-memory pattern that replaces v1's `create_connected_server_and_client_session()` helper.
+
+### The low-level `Server` was rebuilt, not renamed
+
+If you work at the JSON-RPC layer, this is the "everything is different" part of v2. Here is the same one-tool server both ways; click the markers for what moved.
+
+<!-- The v1 fence cannot be a tested docs_src file (nothing in CI can import the
+1.x SDK). Its ground truth: this exact code was run verbatim against a real
+mcp==1.28.1 install. If you edit it, re-validate it against 1.x. -->
+
+```python title="v1"
+from typing import Any
+
+import mcp.types as types
+from mcp.server.lowlevel import Server
+
+server = Server("Bookshop")
+
+
+@server.list_tools()  # (1)!
+async def list_tools() -> list[types.Tool]:
+    return [  # (2)!
+        types.Tool(
+            name="search_books",
+            description="Search the catalog by title or author.",
+            inputSchema={  # (3)!
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        )
+    ]
+
+
+@server.call_tool()
+async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.ContentBlock]:  # (4)!
+    if name != "search_books":
+        raise ValueError(f"Unknown tool: {name}")  # (5)!
+    ctx = server.request_context  # (6)!
+    return [types.TextContent(type="text", text=f"Found 3 books matching {arguments['query']!r}.")]  # (7)!
+```
+
+1. Handlers are registered with decorators (called, with parentheses), any time after the server exists.
+2. You return a bare `list[Tool]` and the SDK wraps it into a `ListToolsResult`.
+3. Fields are camelCase in Python, and the schema is **enforced**: the SDK jsonschema-validates `call_tool` arguments against it before your function runs, which is why `arguments["query"]` below is safe.
+4. One `call_tool` handler serves every tool, and it receives the tool name and the already-validated arguments, unpacked and never `None`.
+5. Raising is how a v1 tool signals failure: any exception is caught and returned as `CallToolResult(isError=True)` with `str(e)` as its text, so the calling model reads this message and can retry.
+6. The context comes from an ambient ContextVar, reached through the server object mid-request.
+7. Bare content blocks are wrapped into a `CallToolResult` for you.
+
+```python title="v2"
+# docs_src/whats_new/tutorial001.py
+from mcp import MCPError
+from mcp.server import Server, ServerRequestContext
+from mcp.types import (
+    INVALID_PARAMS,
+    CallToolRequestParams,
+    CallToolResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    TextContent,
+    Tool,
+)
+
+SEARCH_BOOKS = Tool(
+    name="search_books",
+    description="Search the catalog by title or author.",
+    input_schema={  # (1)!
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    },
+)
+
+
+async def list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams | None) -> ListToolsResult:  # (2)!
+    return ListToolsResult(tools=[SEARCH_BOOKS])  # (3)!
+
+
+async def call_tool(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:  # (4)!
+    if params.name != "search_books":
+        raise MCPError(INVALID_PARAMS, f"Unknown tool: {params.name}")  # (5)!
+    args = params.arguments or {}  # (6)!
+    text = f"Found 3 books matching {args['query']!r}."
+    return CallToolResult(content=[TextContent(type="text", text=text)])  # (7)!
+
+
+server = Server("Bookshop", on_list_tools=list_tools, on_call_tool=call_tool)  # (8)!
+```
+
+1. Fields are snake_case now, and the schema is **advertised but never applied**: nothing checks the arguments before your handler runs.
+2. Every handler has the same shape: `async (ctx, params) -> result`. The context is the first argument (`ctx.session`, `ctx.request_id`, `ctx.protocol_version` live on it); this is where `server.request_context` went.
+3. You build the full `ListToolsResult` yourself. Returning a bare list is a server-side `TypeError` now, not something the SDK wraps.
+4. Typed params in (`params.name`, `params.arguments`), a full result out. Nothing is unpacked, wrapped, or converted for you.
+5. Same check, different verb. A `ValueError` here would reach the model as an opaque `-32603` (see below), so a deliberate wire error is raised as `MCPError`: it passes through with its code and message intact, and `-32602` with this text is the spec's own answer for an unknown tool.
+6. `params.arguments` can be `None`; v1 defaulted it to `{}` before your code ever saw it. With no validation in front of the handler, this line is load-bearing.
+7. An unexpected exception raised here becomes a **sanitized** protocol error, `-32603` `"Internal server error"`: the model never sees the message. For a failure the model should read and react to, return `CallToolResult(is_error=True, ...)`.
+8. Handlers are constructor arguments, so the server's surface is complete the moment it exists; `add_request_handler()` is the post-construction escape hatch, and the door to custom methods.
+
+The example is the pattern. More generally: every handler has the same shape, with typed params in and a full result type out; the old jsonschema check of tool arguments is gone; an exception is a protocol error, never an `is_error=True` tool result; and the ambient `server.request_context` ContextVar is gone. Custom, vendor-namespaced methods are first class through `add_request_handler(method, params_type, handler)`, which validates inbound params against your model before your handler runs. And a `middleware` list (deliberately marked provisional) wraps every inbound message, replacing the private `_handle_*` methods people used to override.
+
+Underneath, the v1 `BaseSession` receive loop was replaced by a dispatcher engine that the client and the server now share, and it is what makes several things on this page true at once: one `Server` object serves both protocol eras, `Client(server)` dispatches in process with no JSON-RPC framing, and a timed-out client request now actually cancels the server-side handler.
+
+**[The low-level Server](https://py.sdk.modelcontextprotocol.io/advanced/low-level-server/index.md)** is the page; the **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md#lowlevel-server-decorator-based-handlers-replaced-with-constructor-on_-params)** walks every removed hook. If you never dropped below `MCPServer`, none of this touches you.
+
+### The wire types moved to `mcp-types`, and every field is snake_case
+
+The protocol types now live in their own distribution, `mcp-types`. It depends on nothing but pydantic and typing-extensions, so a gateway, a proxy, or a code generator can consume MCP's wire shapes without installing an HTTP stack: such a project installs `mcp-types` and imports `mcp_types`. `mcp` itself depends on that package at an exact version and re-exposes it, so code that depends on the SDK keeps writing `import mcp.types as types` and `from mcp.types import Tool` (a permanent alias, every name the same object) and declares only its one real dependency, `mcp`. The rule of thumb: import through whichever package you actually depend on.
+
+On those types, every Python attribute is now snake_case: `result.is_error`, `tool.input_schema`, `listing.next_cursor`. The JSON on the wire is camelCase, exactly as before; only the attribute spelling changed. Two stricter defaults ride along: unknown fields are ignored instead of round-tripped (put extras in `_meta`), and both sides validate traffic against the protocol version they negotiated. See the **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md#field-names-changed-from-camelcase-to-snake_case)** for the rename table.
+
+### Transport configuration moved to `run()`
+
+`MCPServer(...)` is about what your server *is*: its name, its instructions, its lifespan, its auth. How it is *served* now belongs to `run()` and the app builders, which is where `host`, `port`, `stateless_http`, `json_response`, the endpoint paths, and `transport_security` went (`MCPServer("x", port=9000)` is a `TypeError`). The overloads are typed per transport, so your editor tells you which options `stdio` takes and which `streamable-http` takes. One removal worth knowing: `mount_path` is gone; mounting the ASGI app is the supported way to serve under a prefix.
+
+**[Running your server](https://py.sdk.modelcontextprotocol.io/run/index.md)** covers the options; **[Add to an existing app](https://py.sdk.modelcontextprotocol.io/run/asgi/index.md)** covers mounting.
+
+### Behavior that changes without an import error
+
+The renames announce themselves. These do not:
+
+* **Sync functions run on a worker thread.** A `def` tool (or resource, prompt, or resolver) no longer blocks the event loop; the trade is that its body no longer runs *on* the event-loop thread, which matters to thread-affine code. `async def` handlers are untouched. **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md#sync-handler-functions-now-run-on-a-worker-thread)**.
+* **`MCPError` (v1's `McpError`) raised inside a tool is a protocol error now.** The model never sees it. Every other exception still becomes an `is_error=True` result, but only a `ToolError`'s message reaches the model: any other exception now reads `Error executing tool <name>`, with the traceback in your server log. **[Handling errors](https://py.sdk.modelcontextprotocol.io/servers/handling-errors/index.md)** is the split.
+* **Results are validated before they leave.** A hand-built `Tool` whose `input_schema` is `{}` now fails `tools/list` (the spec requires `"type": "object"`). Servers built on `@mcp.tool()` never see this; the SDK writes their schemas.
+* **Your client validates what it receives.** `list_tools()` and `call_tool()` check the server's answer against the negotiated protocol version, so a not-quite-valid server that v1's lenient parse tolerated now raises `pydantic.ValidationError`. If you connect to servers you do not control, expect to be the one who finds them; the **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md#client-validates-inbound-traffic-against-the-protocol-schema)** has the details.
+* **URI templates are real RFC 6570 now.** `{+path}`, `{?query}` and friends work, matching is exact instead of regex-loose, and path traversal in extracted values is rejected by default. Stricter templates fail at decoration time, not on the first request. **[URI templates](https://py.sdk.modelcontextprotocol.io/servers/uri-templates/index.md)**.
+* **The streamable HTTP lifespan runs once**, at startup, and its state is shared by every session and request. In v1 it ran once per session, and once per request under `stateless_http=True`. Pools and caches built in a lifespan get dramatically cheaper; anything that acquired a per-connection resource there belongs in the handler body now. **[Lifespan](https://py.sdk.modelcontextprotocol.io/handlers/lifespan/index.md)**.
+* **`mcp dev` and `mcp install` pin the environment they spawn** to your installed SDK version. Both commands run your server in a fresh `uv run --with ...` environment, which used to resolve `mcp` to the newest stable release rather than the version you are developing against. **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md#mcp-dev-and-mcp-install-pin-the-spawned-environment-to-your-sdk-version)**.
+* **The HTTP client is now `httpx2`, not `httpx`.** The dependency swap changes what your code catches and passes (`httpx2.AsyncClient`, `httpx2.ConnectError`), and it changes how TLS certificates are verified: `httpx2` validates through `truststore` against the operating system trust store instead of certifi's bundled CA list. Most environments never notice; a minimal container with no system CA store, or a private CA that only certifi's bundle knew about, starts failing the TLS handshake. Set `SSL_CERT_FILE`/`SSL_CERT_DIR` or pass `verify=ssl_context` to your client. **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md#httpx-and-httpx-sse-replaced-by-httpx2)**.
+
+### Removed outright
+
+Each of these is a section in the **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md)**:
+
+* The **WebSocket transport**, both sides, and the `mcp[ws]` extra. It was never part of the MCP specification.
+* The **experimental Tasks** API (`mcp.*.experimental`). 2026-07-28 moves tasks out of the core protocol and into an official extension ([SEP-2663](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2663)), which this SDK does not implement yet.
+* `mcp.shared.version`, `mcp.shared.progress`, and `mcp.shared.session` (with the `RequestResponder` stub v1 `message_handler` annotations imported) as import paths. (`mcp.types` is *not* removed: it remains as a permanent alias for the standalone `mcp_types` package.)
+* The deprecated `streamablehttp_client` spelling, and the `get_session_id` callback from `streamable_http_client` (which now yields exactly two streams).
+* `McpError`, renamed **`MCPError`** with a direct `(code, message, data)` constructor.
+* `MCPServer.get_context()`, `mount_path=`, and the lowlevel `Server`'s decorator methods, ContextVar, and handler dicts.
+
+## The protocol: 2025-11-25 to 2026-07-28
+
+v2 implements the 2026-07-28 revision, and it serves **both** revisions at once: the same `streamable_http_app()` (and the same stdio server) answers a 2025-era client's `initialize` and a 2026-era client's requests with nothing to configure, no flag to flip, and no separate deployment. Serving the new revision does not strand a client on the old one. What follows is what the new revision itself changes.
+
+### No handshake, no session
+
+A 2026-07-28 client does not open a connection, negotiate, and then talk. Every request carries its protocol version, client info, and client capabilities in `_meta`, and the one discovery call, `server/discover`, is a plain request like any other. `Client` does the right thing by default: it probes `server/discover` once and falls back to the `initialize` handshake if the server is older.
+
+Over Streamable HTTP there is no `Mcp-Session-Id` on the 2026 path, which is the operational headline: **nothing ties a modern request to a worker**, so any replica behind a plain round-robin load balancer can answer it. Two honest qualifiers. Your 2025-era clients (today, that is most clients) still open sessions and still need whatever stickiness they needed on v1; nothing changes for them. And the one thing a *multi-round-trip* retry has to carry across workers is its sealed `request_state`, whose default key is minted per process, so a scaled-out deployment passes `RequestStateSecurity(keys=[...])`. (`stateless_http=True` is unrelated: it only affects how 2025-era clients are served, and 2026 traffic never reads it; if you already set it in v1, nothing changes.)
+
+**[Protocol versions](https://py.sdk.modelcontextprotocol.io/protocol-versions/index.md)** is the client's side of this, **[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)** is the operator's checklist (the Host allowlist, the `request_state` key, notifications across replicas), and **[Serving legacy clients](https://py.sdk.modelcontextprotocol.io/run/legacy-clients/index.md)** is the both-eras-at-once story.
+
+### The server cannot call the client: multi-round-trip requests
+
+Every server-initiated request is gone at 2026-07-28: push elicitation, sampling, `roots/list`. On a 2026 connection there is no channel for them, so `ctx.elicit()` and `ctx.session.create_message()` fail there with `NoBackChannelError` (they still work for legacy clients).
+
+The replacement turns the call around. A tool that needs something from the user *returns* the question (`InputRequiredResult`), the client answers it with the same callbacks it always had, and the call is retried with the answers attached. `Client` drives that loop for you. On the server you rarely build the result yourself, because a **[dependency](https://py.sdk.modelcontextprotocol.io/handlers/dependencies/index.md)** does it: annotate a parameter with `Resolve(ask_quantity)`, where `ask_quantity` is an ordinary function you write, and the SDK asks over whichever mechanism the connection supports, a live elicitation request on a legacy session or a multi-round-trip on 2026. One tool body, both eras:
+
+```python title="server.py" hl_lines="21"
+# docs_src/legacy_clients/tutorial001.py
+from typing import Annotated
+
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import AcceptedElicitation, Elicit, ElicitationResult, Resolve
+
+mcp = MCPServer("Bookshop")
+
+
+class Quantity(BaseModel):
+    copies: int
+
+
+async def ask_quantity() -> Elicit[Quantity]:
+    """Resolver: ask the user how many copies to put aside."""
+    return Elicit("How many copies?", Quantity)
+
+
+@mcp.tool()
+async def reserve(title: str, quantity: Annotated[ElicitationResult[Quantity], Resolve(ask_quantity)]) -> str:
+    """Reserve copies of a book, asking the user how many."""
+    if isinstance(quantity, AcceptedElicitation):
+        return f"Reserved {quantity.data.copies} of {title!r}."
+    return "Nothing reserved."
+```
+
+```python title="client.py" hl_lines="14-15"
+# docs_src/legacy_clients/tutorial001_client.py
+import anyio
+
+from mcp import Client
+from mcp.client import ClientRequestContext
+from mcp.types import ElicitRequestParams, ElicitResult
+
+
+async def answer(context: ClientRequestContext, params: ElicitRequestParams) -> ElicitResult:
+    return ElicitResult(action="accept", content={"copies": 2})
+
+
+async def main() -> None:
+    async with (
+        Client("http://localhost:8000/mcp", mode="legacy", elicitation_callback=answer) as legacy,
+        Client("http://localhost:8000/mcp", elicitation_callback=answer) as modern,
+    ):
+        for client in (legacy, modern):
+            result = await client.call_tool("reserve", {"title": "Dune"})
+            print(client.protocol_version, result.structured_content)
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+Those two files are the whole pitch: one server, one `Resolve`-backed tool, and a legacy client plus a modern client both getting their answer from the same running server (**[Serving legacy clients](https://py.sdk.modelcontextprotocol.io/run/legacy-clients/index.md)** walks through them). **[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)** explains the mechanism (including `request_state`, which the SDK seals and verifies for you); **[Elicitation](https://py.sdk.modelcontextprotocol.io/handlers/elicitation/index.md)** covers the asking.
+
+!!! warning "This is the one place a ported v1 server changes behavior"
+    Your own tests hit it first: `Client(mcp)` negotiates 2026-07-28 against your v2 server by
+    default, so a tool that calls `ctx.elicit()` fails in a test that passed on v1. Move the
+    question into a `Resolve(...)` parameter (era-portable), or pin the test client to
+    `mode="legacy"` if you genuinely want the push behavior.
+
+### Roots, sampling, and protocol logging are deprecated; `ping` is removed
+
+[SEP-2577](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577) deprecates three whole *capabilities*, on every protocol version: roots, sampling, and MCP-level logging (`ctx.info()` and friends). That is a separate axis from the missing back-channel above; deprecated is advisory, everything keeps working against 2025-era sessions, and nothing changes on the wire. What you notice is `MCPDeprecationWarning`, which is a `UserWarning`, so it prints by default; expect your first `ctx.info(...)` after the upgrade to say so.
+
+`ping` is stricter: removed from the protocol, not deprecated. Two of the deprecated features' standalone methods are removed at 2026-07-28 the same way, `logging/setLevel` and the client's `notifications/roots/list_changed`, and progress notifications are now server-to-client only.
+
+**[Deprecated features](https://py.sdk.modelcontextprotocol.io/deprecated/index.md)** has the full table, the replacement for each, and the one-line filter if you need a quiet log while you serve legacy clients.
+
+### Change notifications become one stream
+
+At 2026-07-28 the standalone HTTP GET stream and `resources/subscribe` are replaced by `subscriptions/listen`: the client opens one long-lived stream and names the notification kinds it wants. `MCPServer` serves it out of the box; you publish with `await ctx.notify_resource_updated(uri)` (and `notify_tools_changed()`, and so on), a middleware can refuse a listen request per caller, and multi-replica deployments plug in a shared `SubscriptionBus`. On the client, `async with client.listen(...)` opens the stream: the filter goes in as keyword arguments, typed change events come back, and `sub.honored` is the subset the server agreed to deliver.
+
+**[Subscriptions](https://py.sdk.modelcontextprotocol.io/handlers/subscriptions/index.md)** covers publishing and serving, **[its Clients twin](https://py.sdk.modelcontextprotocol.io/client/subscriptions/index.md)** the watching end, and **[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)** the bus.
+
+### The rest, quickly
+
+* **Identity is optional, per-message metadata.** The request-side `clientInfo` `_meta` key is optional (the required pair is `protocolVersion` + `clientCapabilities`), and `serverInfo` moved out of the `server/discover` result body: servers stamp it into every 2026-era result's `_meta` instead ([spec #3002](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/3002)). The SDK always stamps; `client.server_info` is `None` when a server does not identify itself (for example, a middleware stripped the key). **[The low-level Server](https://py.sdk.modelcontextprotocol.io/advanced/low-level-server/index.md)** shows the stamp on the wire.
+* **Requests are routable without parsing bodies.** Modern HTTP requests carry `Mcp-Method` (and, for the three tool-ish calls, `Mcp-Name`); a tool input-schema property annotated with `x-mcp-header` is mirrored into an `Mcp-Param-*` header and cross-checked by the server ([SEP-2243](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2243)). Gateways and rate limiters can route on headers alone; the **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md#servers-validate-mcp-param-headers-against-the-request-body-sep-2243)** has the rules.
+* **Results carry cache hints.** List and read results declare `ttlMs` and `cacheScope` ([SEP-2549](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2549)); you set them per method with `cache_hints=`, and `Client` honors them with a built-in response cache. A server that sends no hints (every pre-2026 server) sees identical, uncached traffic. **[Caching hints](https://py.sdk.modelcontextprotocol.io/client/caching/index.md)**.
+* **Extensions are first class.** Servers and clients declare optional capability bundles under reverse-DNS identifiers ([SEP-2133](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2133)); the built-in `Apps` extension (MCP Apps) is the reference. **[Extensions](https://py.sdk.modelcontextprotocol.io/advanced/extensions/index.md)** and **[MCP Apps](https://py.sdk.modelcontextprotocol.io/advanced/apps/index.md)**.
+* **Error codes got standardized.** A missing resource is `-32602` with the URI in `error.data`, and the new spec-reserved codes appear as `-32020` (header mismatch), `-32021` (missing required capability), and `-32022` (unsupported protocol version). **[Troubleshooting](https://py.sdk.modelcontextprotocol.io/troubleshooting/index.md)** is keyed by the exact messages.
+* **Authorization got harder to hold wrong.** The client validates the `iss` returned with the authorization code ([RFC 9207](https://datatracker.ietf.org/doc/html/rfc9207); your `callback_handler` now returns an `AuthorizationCodeResult`), sends `application_type` when it registers, and never replays credentials against a different authorization server. New in the enterprise corner: the [SEP-990](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/990) identity-assertion flow. The **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md)** lists every OAuth change; **[OAuth for clients](https://py.sdk.modelcontextprotocol.io/client/oauth-clients/index.md)** and **[Identity assertion](https://py.sdk.modelcontextprotocol.io/client/identity-assertion/index.md)** are the pages.
+* **Every server is traceable.** OpenTelemetry ships on by default as middleware: every request gets a server span, at no cost until the process configures an exporter. When both ends run the SDK, the client also propagates W3C trace context in `_meta`, so the traces join up. **[OpenTelemetry](https://py.sdk.modelcontextprotocol.io/run/opentelemetry/index.md)**.
+
+## Upgrading from v1?
+
+* The **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md)** is the complete, exact list of what to change; this page was the why.
+* **v1.x is not going anywhere.** It moves to maintenance, keeps getting critical fixes and security patches, and nothing about the 2026-07-28 spec release breaks it; its docs live at [/v1/](https://py.sdk.modelcontextprotocol.io/v1/). If you publish a library that depends on `mcp` and are not ready to migrate, keep an upper bound (for example `mcp>=1.28,<2`) so an unpinned resolve stays on 1.x.
+* Something rough, confusing, or broken? **[File v2 feedback](https://github.com/modelcontextprotocol/python-sdk/issues/new?template=v2-feedback.yaml)**; it all gets read.
+
+# Protocol versions
+
+Source: https://py.sdk.modelcontextprotocol.io/protocol-versions/
+
+MCP has two eras.
+
+Servers released before 2026-07-28 open every connection with the **`initialize` handshake**: the client proposes a version, the server counters, the client acknowledges, all before the first useful request. Servers at **2026-07-28** drop the handshake. The client sends one **`server/discover`** probe and the server answers it with everything in a single result.
+
+You almost never have to care, because `Client` negotiates for you. This page is about the one constructor argument that controls it, `mode=`, and the three times you change it.
+
+Every snippet on this page is a `client.py` that talks to the Bookshop `server.py` from **[The Client](https://py.sdk.modelcontextprotocol.io/client/index.md)**. Start that server in one terminal:
+
+```console
+uv run mcp run server.py --transport streamable-http
+```
+
+Then run each snippet in a second terminal with `python client.py`.
+
+## `mode="auto"`
+
+```python title="client.py" hl_lines="7-8"
+# docs_src/protocol_versions/tutorial001.py
+import anyio
+
+from mcp import Client
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        print(client.protocol_version)
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+You didn't pass `mode`, so you got the default: `"auto"`. Entering `async with` sends a single `server/discover` probe at the newest version this SDK speaks. Then:
+
+* A **modern server** answers it. The client adopts the result. One round trip, done.
+* An **older server** has never heard of `server/discover` and returns an error. The client falls back to the classic `initialize` handshake and takes whatever that negotiates.
+
+Either way you come out connected, and `client.protocol_version` tells you which it was:
+
+```text
+2026-07-28
+```
+
+That is the whole feature. One `Client`, any era of server, no branching in your code.
+
+!!! info
+    `MCPServer` answers `server/discover` on every transport — Streamable HTTP, stdio, and the
+    in-process connection your tests use — so against your own server `auto` always lands on
+    `2026-07-28`. The fallback only ever fires against a real pre-2026 server, which is exactly
+    when you want it to.
+
+## `mode="legacy"`
+
+```python title="client.py" hl_lines="7"
+# docs_src/protocol_versions/tutorial002.py
+import anyio
+
+from mcp import Client
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp", mode="legacy") as client:
+        print(client.protocol_version)
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+`mode="legacy"` never probes. It runs the `initialize` handshake, the same connection a pre-2026 client opens.
+
+```text
+2025-11-25
+```
+
+Same server. It speaks `2026-07-28` perfectly well; you told the client not to ask.
+
+You want this for the **push-style** features.
+
+A server-initiated request is the server calling *you*: `ctx.elicit(...)` putting a form in front of your user, sampling asking your model for a completion mid-tool-call. That channel only exists on a handshake-era session.
+
+At 2026-07-28 it is gone. The server *returns* its questions and you retry the call with the answers (**[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**).
+
+`mode="auto"` only gives you a handshake when the server is too old for anything else. `mode="legacy"` guarantees one. Reach for it whenever you hand `Client(...)` a `sampling_callback`, an `elicitation_callback` you want driven as a request, or a `message_handler`. **[Client callbacks](https://py.sdk.modelcontextprotocol.io/client/callbacks/index.md)** goes through each.
+
+## Pinning a version
+
+`mode` also accepts a modern protocol version string. Today that set is exactly `["2026-07-28"]`.
+
+```python title="client.py" hl_lines="7"
+# docs_src/protocol_versions/tutorial003.py
+import anyio
+
+from mcp import Client
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp", mode="2026-07-28") as client:
+        print(client.protocol_version)
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+A pin sends **nothing**. No probe, no handshake. The client adopts `2026-07-28` locally and the connection is live the instant `async with` returns.
+
+A pin is a promise *you* make: you already know the server speaks that version. The client doesn't check.
+
+!!! check
+    A pin is not a discovery. Print `client.server_info` and the price is right there:
+
+    ```text
+    None
+    ```
+
+    The client never asked the server who it is, so `server_info` is `None`. `client.server_capabilities`
+    is the same story: every capability is `None`. Tool calls still work (the protocol needs none of it);
+    code that reads `server_capabilities` to decide what to offer does not.
+
+    The next section is the fix.
+
+Only modern versions are pinnable. A handshake-era string is rejected at construction, before any I/O, and the error tells you what to write instead:
+
+```text
+ValueError: mode must be 'legacy', 'auto', or one of ['2026-07-28']; got '2025-06-18' ('2025-06-18' is a handshake-era version; use mode='legacy')
+```
+
+## Reconnecting with `prior_discover`
+
+The probe is cheap, but it is still a round trip you pay on every reconnect, and the answer almost never changes.
+
+So keep it. After an `auto` connection, `client.session.discover_result` holds the exact `DiscoverResult` the server sent: its `supported_versions`, its `capabilities`, its `instructions`, and the identity the server stamped into the result's `_meta`. Hand it back as `prior_discover=` the next time:
+
+```python title="client.py" hl_lines="8 10"
+# docs_src/protocol_versions/tutorial004.py
+import anyio
+
+from mcp import Client
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        saved = client.session.discover_result
+
+    async with Client("http://localhost:8000/mcp", mode="2026-07-28", prior_discover=saved) as client:
+        print(client.protocol_version)
+        if client.server_info is not None:
+            print(client.server_info.name)
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+```text
+2026-07-28
+Bookshop
+```
+
+The second connection made **zero** negotiation round trips and still knows exactly who it is talking to. That is the pinned mode done properly: `mode=` names the version, `prior_discover=` supplies the identity. ✨
+
+`DiscoverResult` is a Pydantic model. `saved.model_dump_json()` goes into a file or a cache; `DiscoverResult.model_validate_json(...)` brings it back in the next process.
+
+!!! tip
+    `prior_discover=` only does anything when `mode` is a version pin. Under `"auto"` the client
+    probes the server anyway, and under `"legacy"` it is ignored.
+
+## The four modes
+
+| You write | Negotiation traffic | You get |
+| --- | --- | --- |
+| `Client(target)` | one `server/discover` probe; the `initialize` handshake if it fails | the newest version both sides speak, whichever era |
+| `Client(target, mode="legacy")` | the `initialize` handshake | a handshake-era version; server-initiated requests work |
+| `Client(target, mode="2026-07-28")` | none | that version, pinned, with `server_info` as `None` |
+| `Client(target, mode="2026-07-28", prior_discover=saved)` | none | that version, pinned, *and* the identity you saved last time |
+
+## Recap
+
+* MCP has a handshake era (up to `2025-11-25`, the `initialize` handshake) and a modern era (`2026-07-28`, `server/discover`). `Client` bridges them.
+* `mode="auto"` is the default: probe, fall back. Leave it alone unless one of the other three rows describes you.
+* `client.protocol_version` is always the answer to "what did I get?".
+* `mode="legacy"` forces the handshake. It is what you need for server-initiated requests: sampling, push elicitation, `message_handler`.
+* A version pin (`mode="2026-07-28"`) sends no negotiation traffic at all, at the cost of `client.server_info` being `None`.
+* `prior_discover=` pays that cost back: save `client.session.discover_result`, reconnect with it, get both.
+
+A modern connection has no push channel, so how does a 2026 server ask you a question mid-call? It returns it: **[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**.
+
+# Deprecated features
+
+Source: https://py.sdk.modelcontextprotocol.io/deprecated/
+
+The 2026-07-28 spec retires five things. The SDK still implements every one of them, and every one of them now carries a **deprecation warning**. A few SDK-level deprecations stand on their own account and are listed [at the end](#deprecated-sdk-helpers).
+
+The table below names each deprecated feature, why it is going away, and the replacement to build on.
+
+## What is deprecated
+
+| Deprecated | Why | What you do instead |
+|---|---|---|
+| **Roots**: `ctx.session.list_roots()`, `client.send_roots_list_changed()`, the `list_roots_callback=` you pass to `Client(...)` | [SEP-2577](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577) retires the capability. | Take the paths as ordinary tool arguments or resource URIs, or embed a `ListRootsRequest` in an `InputRequiredResult` (see **[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**). |
+| **Server-initiated sampling**: `ctx.session.create_message()`, the `sampling_callback=` you pass to `Client(...)` | SEP-2577 retires the capability. | Return `InputRequiredResult` and let the client retry the call (see **[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**). |
+| **Protocol logging**: `ctx.log()`, `ctx.debug()`, `ctx.info()`, `ctx.warning()`, `ctx.error()`, `ctx.session.send_log_message()`, `client.set_logging_level()` | SEP-2577 retires the capability. Nothing in-protocol replaces it. | Ordinary `import logging` to stderr (see **[Logging](https://py.sdk.modelcontextprotocol.io/handlers/logging/index.md)**). |
+| **`ping`**: `client.send_ping()` | **Removed** from the protocol, not merely deprecated. There is no `ping` method in 2026-07-28. | Nothing. It only works against a `mode="legacy"` connection. |
+| **Client->server progress**: `client.send_progress_notification()` | 2026-07-28 makes progress server->client only. | Nothing to send. Your *server* reports progress with `ctx.report_progress()` (see **[Progress](https://py.sdk.modelcontextprotocol.io/handlers/progress/index.md)**). |
+
+Three things fall out of that table:
+
+* Roots, sampling, and logging go together. One proposal, **SEP-2577**, deprecates all three capabilities at once.
+* Sampling and roots share a deeper problem: they are places a **server** sends a **request** to the **client**. That whole direction is what 2026-07-28 replaces with **[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**. It is the standalone RPC methods (`sampling/createMessage`, `roots/list`, and push-style `elicitation/create`) that are gone; the `CreateMessageRequest` / `ListRootsRequest` / `ElicitRequest` payload types survive, embedded in `InputRequiredResult.input_requests`, and on the client they hit the same callbacks.
+* `ping` is the odd one out. The protocol does not deprecate it, it removes it. The SDK method still warns (its message says *removed*, not *deprecated*) and calling it on a modern connection answers with *"Method not found"*.
+
+## Deprecated is advisory
+
+Nothing breaks today.
+
+Every method above keeps working against any session that negotiated **2025-11-25 or earlier**. Pin `mode="legacy"` on the client and you get exactly the pre-2026 behaviour. There are no wire changes and capability negotiation is unchanged.
+
+What changes is that you get a visible warning the first time each one runs:
+
+```text
+MCPDeprecationWarning: The logging capability is deprecated as of 2026-07-28 (SEP-2577).
+```
+
+`MCPDeprecationWarning` subclasses `UserWarning`, **not** `DeprecationWarning`. That is deliberate: Python's default filter only shows `DeprecationWarning` in code run directly as `__main__`, which is how libraries deprecate things and nobody notices for two years. This one shows up everywhere, with no `-W` flag.
+
+!!! warning
+    "Advisory" stops at the wire. Sampling and roots are server-to-client *requests*, and a
+    2026-07-28 session has no channel to carry one. Call `ctx.session.create_message()`
+    inside a tool on a modern connection and the warning still fires, and then the send
+    fails with an error:
+
+    ```text
+    Cannot send 'sampling/createMessage': this transport context has no back-channel
+    for server-initiated requests.
+    ```
+
+    Two signals, in that order. The `MCPDeprecationWarning` fires the moment you call the
+    method, on any connection. The error is what comes back when the SDK then tries to
+    send. These two only work end-to-end on a `mode="legacy"` connection whose client
+    registered the matching callback.
+
+## `ping` on a legacy session
+
+A **ping** is an empty request either side can send to check that the other is still answering. The 2026-07-28 spec removes it ([SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575)): every request a modern client sends already proves the server is there, and a modern server has no channel to send one. Both SDK methods still work on a handshake-era session. From the client:
+
+```python
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp", mode="legacy") as client:
+        await client.send_ping()  # warns; returns an EmptyResult
+```
+
+And from the server, inside any handler:
+
+```python
+@mcp.tool()
+async def check_client(ctx: Context) -> str:
+    """A tool that still pings the client mid-call."""
+    await ctx.session.send_ping()  # no warning; an EmptyResult while the client is connected
+    return "client answered"
+```
+
+* `client.send_ping()` warns with `MCPDeprecationWarning` on every call. On a default (`2026-07-28`) connection the server answers `MCPError: Method not found` instead.
+* `ctx.session.send_ping()` carries no warning. On a modern connection it raises the same no-back-channel error as any other server-initiated request.
+* Neither side registers anything to answer a ping.
+
+## Roots change notifications
+
+A 2025-era client that declared the roots capability can tell the server that its workspace folders changed by sending `notifications/roots/list_changed`; the server responds by requesting `roots/list` again. The 2026-07-28 spec removes the notification along with the rest of the push-style roots flow. On the client, passing `list_roots_callback=` (**[Client callbacks](https://py.sdk.modelcontextprotocol.io/client/callbacks/index.md)**) is what declares `"roots": {"listChanged": true}`, and one call keeps that promise:
+
+```python
+async def open_folder(client: Client, uri: str, name: str) -> None:
+    """The user opened another folder: expose it through the roots callback, then tell the server."""
+    workspace.append(Root(uri=FileUrl(uri), name=name))
+    await client.send_roots_list_changed()
+```
+
+On the server, the low-level `Server` takes the receiving handler:
+
+```python
+async def roots_changed(ctx: ServerRequestContext, params: NotificationParams | None) -> None:
+    """The client's roots changed: ask for the new list."""
+    roots = (await ctx.session.list_roots()).roots
+
+
+server = Server("Bookshop", on_roots_list_changed=roots_changed)
+```
+
+* `workspace` is the list your `list_roots_callback` returns. `client.send_roots_list_changed()` warns, and it needs a `mode="legacy"` client: on a modern connection the notification is silently dropped. Keep the session open afterwards, because the server's follow-up `roots/list` arrives on it.
+* `MCPServer` has no hook for the notification. On the low-level `Server`, `on_roots_list_changed=` registers the handler (deprecated too, and it warns at construction). The notification carries no payload, so the handler calls `ctx.session.list_roots()` for the new list.
+
+## Silencing the warning
+
+Don't, in new code.
+
+But a server you maintain that genuinely serves pre-2026 clients has every right to a quiet log. Filter the category before the first deprecated call runs:
+
+```python
+import warnings
+
+from mcp import MCPDeprecationWarning
+
+warnings.filterwarnings("ignore", category=MCPDeprecationWarning)
+```
+
+That is the whole API. There is no per-method switch, and you don't want one: the point of one category is that one line silences it and one line brings it back.
+
+!!! check
+    Run the filter the other way and you get a free regression test. Add
+    `"error::mcp.MCPDeprecationWarning"` to the `filterwarnings` setting in your pytest
+    configuration and the deprecated call **raises** instead of warning. A tool named
+    `old_log` that still calls `ctx.info()` stops passing: the call comes back `is_error=True` with
+    `Error executing tool old_log`, and the captured server log names the culprit:
+
+    ```text
+    mcp.shared.exceptions.MCPDeprecationWarning: The logging capability is deprecated as of 2026-07-28 (SEP-2577).
+    ```
+
+    One line of pytest configuration, and a deprecated call can never sneak back into your
+    codebase without failing a test.
+
+## Deprecated SDK helpers
+
+These are not spec changes, only SDK usage with a better replacement. They warn with the same `MCPDeprecationWarning`, and 3.0 removes the old form.
+
+| Deprecated | What you do instead |
+|---|---|
+| `FuncMetadata.call_fn_with_arg_validation()` | `FuncMetadata.validate_arguments()` and then `FuncMetadata.call_fn()`. Only code that drives `FuncMetadata` directly (a custom `Tool` subclass, say) ever called it. |
+| `AuthSettings(resource_server_url=...)` without `validate_token_resource=` | Set it: `True` has the server refuse bearer tokens your verifier does not report as issued for `resource_server_url`, `False` says your verifier checks the token's audience itself (see **[Authorization](https://py.sdk.modelcontextprotocol.io/run/authorization/index.md#a-token-verifier)**). Unset behaves as `False`; 3.0 makes `True` the default whenever `resource_server_url` is set. |
+| `ClientCredentialsOAuthProvider(...)` or `PrivateKeyJWTOAuthProvider(...)` without `issuer=` | Pass `issuer=` naming the authorization server that issued the credentials (see **[Writing OAuth clients](https://py.sdk.modelcontextprotocol.io/client/oauth-clients/index.md#machine-to-machine)**). Without it the MCP server decides which authorization server receives them; 3.0 makes the keyword required. |
+
+## Recap
+
+* The 2026-07-28 spec deprecates **roots**, server-initiated **sampling**, and protocol **logging** (all [SEP-2577](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577)), restricts **progress** to server-to-client, and removes **`ping`**.
+* The replacement column points you onward: **[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)** for sampling and roots, **[Logging](https://py.sdk.modelcontextprotocol.io/handlers/logging/index.md)** for logging, **[Progress](https://py.sdk.modelcontextprotocol.io/handlers/progress/index.md)** for progress. `ping` needs nothing at all.
+* Deprecated is advisory: no wire changes, everything keeps working against pre-2026 sessions, and you get a visible `MCPDeprecationWarning` (a `UserWarning`, so it is on by default).
+* Sampling and roots additionally need a back-channel that a 2026-07-28 session does not have. On a modern connection they warn and then they raise.
+* `warnings.filterwarnings("ignore", category=MCPDeprecationWarning)` silences the whole category; `"error::mcp.MCPDeprecationWarning"` in pytest turns it into a test failure.
+* The [SDK-level deprecations](#deprecated-sdk-helpers) follow the same rule: they warn now, and 3.0 drops the old form.
+* New code should not be built on any of these.
+
+Every other page in these docs teaches the current API.
+
+# Troubleshooting
+
+Source: https://py.sdk.modelcontextprotocol.io/troubleshooting/
+
+Every heading on this page is the exact text of an error the SDK produces, followed by what it means and the one-move fix. Find the last line of your traceback (or your server log) here with your browser's find-in-page, and read only that entry.
+
+Several entries run against this one server. One tool and one templated resource, each raising for a city it doesn't know:
+
+```python title="server.py"
+# docs_src/troubleshooting/tutorial001.py
+from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ResourceNotFoundError, ToolError
+
+mcp = MCPServer("Weather")
+
+FORECASTS = {"London": "Rain.", "Cairo": "Sun."}
+
+
+@mcp.tool()
+def forecast(city: str) -> str:
+    """Today's forecast for one city."""
+    if city not in FORECASTS:
+        raise ToolError(f"No forecast for {city!r}.")
+    return FORECASTS[city]
+
+
+@mcp.resource("weather://{city}")
+def report(city: str) -> str:
+    """The full report for one city."""
+    if city not in FORECASTS:
+        raise ResourceNotFoundError(f"No forecast for {city!r}.")
+    return f"{city}: {FORECASTS[city]}"
+```
+
+Those entries reach it at `http://localhost:8000/mcp`, so leave it running over HTTP:
+
+```console
+uv run mcp run server.py --transport streamable-http
+```
+
+The errors this page quotes are real: the SDK's own test suite reproduces every one of them.
+
+## `ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)`
+
+This is not an MCP error. It is anyio noise, and your real error is the **last line** of the paste.
+
+`Client.__aenter__` starts a task group. anyio wraps anything that leaves a task group in an `ExceptionGroup`, so *every* exception that escapes an `async with Client(...)` block, whatever it is, arrives inside one:
+
+```python
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        await client.read_resource("weather://Atlantis")
+```
+
+```text
+  + Exception Group Traceback (most recent call last):
+  |   ...
+  | ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)
+  +-+---------------- 1 ----------------
+    | Exception Group Traceback (most recent call last):
+    |   ...
+    | ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)
+    +-+---------------- 1 ----------------
+      | Traceback (most recent call last):
+      |   ...
+      | mcp.shared.exceptions.MCPError: No forecast for 'Atlantis'.
+      +------------------------------------
+```
+
+Two things to do with that:
+
+1. **Read the bottom.** `MCPError: No forecast for 'Atlantis'.` is the failure; find *its* text on this page.
+2. **Catch inside the block.** The `ExceptionGroup` only appears when the exception *leaves* the `async with`. Caught inside it, the same failure is the plain `MCPError`, no group anywhere:
+
+```python
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        try:
+            await client.read_resource("weather://Atlantis")
+        except MCPError as e:
+            print(e)  # No forecast for 'Atlantis'.
+```
+
+!!! tip
+    A failure during *connection* (a wrong URL, a server that isn't running, the `421` further
+    down this page) escapes from `async with` itself, so there is no "inside" to catch it in.
+    For those, read the bottom of the group.
+
+## `RuntimeError: Client must be used within an async context manager`
+
+`Client(...)` only builds the object. Nothing connects until `async with`, so every method refuses:
+
+```python
+async def main() -> None:
+    client = Client("http://localhost:8000/mcp")
+    tools = await client.list_tools()  # RuntimeError
+```
+
+Enter it. `__aenter__` is the connection:
+
+```python
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        tools = await client.list_tools()
+```
+
+`__aexit__` is the disconnection, which is why there is no `client.close()` to forget. **[Testing](https://py.sdk.modelcontextprotocol.io/get-started/testing/index.md)** is built on exactly this pattern.
+
+## `Error executing tool <name>: <message>`, `Error executing tool <name>`, and `Unknown tool: <name>`
+
+You are reading a **result**, not an exception. `call_tool` did not raise, and it never will for a failing tool.
+
+Call `forecast` for a city the server doesn't know, and the `ToolError` it raises comes back with the request marked as *succeeded*:
+
+```python
+result.is_error  # True
+result.content   # [TextContent(text="Error executing tool forecast: No forecast for 'Atlantis'.")]
+result.structured_content  # None
+```
+
+`Unknown tool: get_forecast` is the same shape for a name the server never registered, and a bad argument is rejected the same way, against the tool's input schema, before your function ever runs.
+
+The fix is in your client: **check `result.is_error`**. A `try/except` around `call_tool` catches none of these, because there is nothing to catch. This is deliberate, and it is the single most useful thing on this page to internalise: the *model* chose the call, so the model gets the message and a chance to try again. **[Handling errors](https://py.sdk.modelcontextprotocol.io/servers/handling-errors/index.md)** is the whole story, including the `MCPError` path that *does* raise.
+
+The bare form, `Error executing tool <name>` with no message, means the tool **crashed**: an exception it didn't anticipate escaped it (or its return value failed the output schema), and that exception's text is kept off the wire. The traceback is in the **server's log** at `ERROR`, as `Tool '<name>' raised an unexpected exception`.
+
+## `TypeError: The @tool decorator was used incorrectly. Did you forget to call it? Use @tool() instead of @tool`
+
+You wrote `@mcp.tool` instead of `@mcp.tool()`. `tool()` is a decorator *factory*: without the parentheses, Python hands your function to its `name=` parameter.
+
+```python
+@mcp.tool  # <- missing ()
+def forecast(city: str) -> str:
+    """Today's forecast for one city."""
+    return f"{city}: Rain."
+```
+
+```text
+TypeError: The @tool decorator was used incorrectly. Did you forget to call it? Use @tool() instead of @tool
+```
+
+Add the parentheses. `@mcp.resource(...)` and `@mcp.prompt()` say the same thing for the same slip.
+
+!!! note
+    This raises when the module is **imported**, before any client connects. So a host that shows
+    your server as *failed to start* (or *disconnected*), rather than as connected with zero
+    tools, has this shape: run `python server.py` yourself and read the traceback. A type checker
+    also catches it: a function is not a valid `name=`.
+
+## `Tool already exists: <name>`
+
+Two registrations used the same tool name. The **first** one wins, the second is silently dropped, and this warning in the *server log* is the only signal:
+
+```python title="server.py" hl_lines="6 12"
+# docs_src/troubleshooting/tutorial002.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Weather")
+
+
+@mcp.tool(name="forecast")
+def forecast_today(city: str) -> str:
+    """Today's forecast for one city."""
+    return f"{city}: Rain."
+
+
+@mcp.tool(name="forecast")  # Same name. This registration is dropped.
+def forecast_hourly(city: str, hours: int) -> str:
+    """The next few hours for one city."""
+    return f"{city}: Rain for {hours}h."
+```
+
+```text
+WARNING mcp.server.mcpserver.tools.tool_manager: Tool already exists: forecast
+```
+
+`tools/list` reports one `forecast`, and it is `forecast_today`. Rename one of them. `MCPServer(..., warn_on_duplicate_tools=False)` silences the warning without changing the outcome, so leave it on. Resources and prompts have the same rule and the same log line (`Resource already exists:`, `Prompt already exists:`).
+
+## My host lists zero tools
+
+There is no error string for this, which is exactly why it is hard to search. The SDK never drops a registered tool from `tools/list`, so work outward:
+
+* **Did the server start at all?** `@mcp.tool` without parentheses raises at import time, and a crashed server looks a lot like an empty one in some hosts. Run `python server.py` yourself.
+* **Is the tool on the `mcp` the host is running?** A second `MCPServer(...)` in another module is a different, empty server. Check which object the host's command actually imports.
+* **Did two tools share a name?** Then one of them is gone. Look for `Tool already exists:` in the server log.
+* **Is the host's list stale?** Adding a tool after startup only reaches clients that handle `notifications/tools/list_changed`. Restarting the host is the blunt fix.
+* **Did something write to `stdout` outside the diverted window?** While serving, the SDK diverts *flushed* stray stdout to stderr (best-effort: an environment that replaces the standard streams is served as-is), but output flushed to stdout earlier (a wrapper script echoing, an import-time `print()` in an unbuffered process) or a buffered `print()` drained at interpreter exit lands on the protocol stream, and one junk line can make the host drop the connection, which some hosts render as a server with nothing in it. Log with the `logging` module instead. The rest of the host-side checklist is on **[Connect to a real host](https://py.sdk.modelcontextprotocol.io/get-started/real-host/index.md)**.
+
+An "invalid" tool name is *not* on that list: a non-conforming name logs a warning but the tool is registered and listed anyway.
+
+## `MCPError: Server returned an error response`
+
+The server refused the HTTP request outright, with a body that is not JSON-RPC, so the python `Client` has nothing better to show you than this stand-in.
+
+By far the most common cause is a freshly deployed Streamable HTTP server. `streamable_http_app()` (and `mcp.run("streamable-http")`) with no `transport_security=` defaults to **DNS-rebinding protection**: it accepts only requests whose `Host` header is localhost. That is the right default on your laptop and the wrong one behind a real hostname:
+
+```python title="server.py" hl_lines="12"
+# docs_src/troubleshooting/tutorial003.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Weather")
+
+
+@mcp.tool()
+def forecast(city: str) -> str:
+    """Today's forecast for one city."""
+    return f"{city}: Rain."
+
+
+app = mcp.streamable_http_app()
+```
+
+Deploy that, point a client at it, and the connection fails on the handshake:
+
+```python
+async with Client("https://mcp.example.com/mcp") as client:
+    ...
+```
+
+```text
+mcp.shared.exceptions.MCPError: Server returned an error response
+```
+
+The words the server actually sent, `421` and `Invalid Host header`, never reach you: the 421 body has no `Content-Type: application/json`, so the client cannot parse it. They are in the **server's log**, which is where to look next:
+
+```text
+WARNING mcp.server.transport_security: Invalid Host header: mcp.example.com
+```
+
+The fix is `transport_security=`. Allowlist the hostname you actually serve:
+
+```python title="server.py" hl_lines="14-17"
+# docs_src/troubleshooting/tutorial004.py
+from mcp.server import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
+
+mcp = MCPServer("Weather")
+
+
+@mcp.tool()
+def forecast(city: str) -> str:
+    """Today's forecast for one city."""
+    return f"{city}: Rain."
+
+
+app = mcp.streamable_http_app(
+    transport_security=TransportSecuritySettings(
+        allowed_hosts=["mcp.example.com", "mcp.example.com:*"],
+        allowed_origins=["https://app.example.com"],
+    )
+)
+```
+
+!!! check
+    That is the whole change. The identical client now connects, negotiates `2026-07-28`, and
+    calls `forecast`.
+
+**[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)** covers what each field means, the reverse-proxy case, and everything else that changes at deploy time. And `421 Misdirected Request` / `Invalid Host header`, right below, is the same failure seen from the other side.
+
+## `421 Misdirected Request` / `Invalid Host header`
+
+This is `Server returned an error response`, seen from anything that is *not* the python `Client`: curl, a browser's network tab, a reverse proxy's access log, or another SDK.
+
+```bash
+curl -i https://mcp.example.com/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}'
+```
+
+```text
+HTTP/1.1 421 Misdirected Request
+
+Invalid Host header
+```
+
+`421 Misdirected Request` is HTTP's own reason phrase for the status; `Invalid Host header` is the SDK's response body; and the python `Client` renders the same event as `Server returned an error response`. All three are one refusal. The check runs against the **`Host` header the request carries**, not the address the server bound, so a reverse proxy that forwards the public hostname trips it exactly as a direct client does.
+
+The fix is the same `transport_security=TransportSecuritySettings(allowed_hosts=[...], allowed_origins=[...])` shown under `Server returned an error response`. Two of its edges are worth naming:
+
+* An `allowed_hosts` entry is an exact string. `"mcp.example.com"` matches a bare `Host` header and `"mcp.example.com:*"` matches any explicit port. List both.
+* A `403` with the body `Invalid Origin header` is the sibling check on the `Origin` header. It only fires for browsers (nothing else sends `Origin`), and `allowed_origins=` is its allowlist.
+
+**[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)** has the full treatment, including when switching the check off is the honest configuration.
+
+## `RuntimeError: Task group is not initialized. Make sure to use run().`
+
+Your MCP app is mounted inside another ASGI app, and nothing started its **session manager**.
+
+`mcp.streamable_http_app()` returns a Starlette app whose own lifespan starts the manager, and `uvicorn server:app` runs that lifespan for you. But Starlette **never runs a mounted sub-application's lifespan**, so the moment the app goes inside a `Mount`, the manager never starts and the first request explodes:
+
+```python title="server.py" hl_lines="16"
+# docs_src/troubleshooting/tutorial005.py
+from starlette.applications import Starlette
+from starlette.routing import Mount
+
+from mcp.server import MCPServer
+
+mcp = MCPServer("Weather")
+
+
+@mcp.tool()
+def forecast(city: str) -> str:
+    """Today's forecast for one city."""
+    return f"{city}: Rain."
+
+
+# The mount works. The MCP app's own lifespan never runs.
+app = Starlette(routes=[Mount("/", app=mcp.streamable_http_app())])
+```
+
+The server starts. The route resolves. Then `uvicorn` prints this for every request:
+
+```text
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  ...
+RuntimeError: Task group is not initialized. Make sure to use run().
+```
+
+The client sees a 500. The fix is a lifespan on the **host** app that enters `mcp.session_manager.run()`:
+
+```python
+@asynccontextmanager
+async def lifespan(app: Starlette) -> AsyncIterator[None]:
+    async with mcp.session_manager.run():
+        yield
+
+
+app = Starlette(routes=[Mount("/", app=mcp.streamable_http_app())], lifespan=lifespan)
+```
+
+**[Add to an existing app](https://py.sdk.modelcontextprotocol.io/run/asgi/index.md)** is the page for this, including several servers in one app and FastAPI. Two neighbouring strings from the same class:
+
+* `StreamableHTTPSessionManager .run() can only be called once per instance. Create a new instance if you need to run again.` The manager is single-use; entering the same app's lifespan twice hits it.
+* `mcp.session_manager` only exists **after** `streamable_http_app()` has been called, so build the routes first and touch the manager only inside the lifespan.
+
+## `MCPError: Session not found`
+
+The server does not recognise the `Mcp-Session-Id` your client sent. Either the server **restarted** (or you were routed to a different instance), or the session **expired** because nothing was in flight for `session_idle_timeout`, which is 30 minutes by default. See [Session lifetime and limits](https://py.sdk.modelcontextprotocol.io/run/legacy-clients/index.md#session-lifetime-and-limits). Sessions live in that one process's memory.
+
+There is no server bug to find. The HTTP response is a `404` whose body *is* JSON-RPC, so, unlike the `421` above, the python `Client` shows you this one verbatim:
+
+```json
+{"jsonrpc": "2.0", "id": null, "error": {"code": -32600, "message": "Session not found"}}
+```
+
+The fix is to reconnect: leave the `async with Client(...)` block and enter a new one, which negotiates a fresh session. For a long-lived client, that means catching `MCPError` around your calls and reconnecting on this message rather than retrying inside a dead session.
+
+If it happens *without* a restart and without the client having gone quiet that long, you are running more than one worker without sticky sessions: each worker holds its own session table, so a request routed to the wrong one lands here. **[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)** and **[Serving legacy clients](https://py.sdk.modelcontextprotocol.io/run/legacy-clients/index.md)** own that story and its two fixes (sticky routing, or `stateless_http=True`).
+
+For the server operator, the matching log line is `Rejected request with unknown or expired session ID: <id>`. It is logged at `INFO`, so it is invisible at the usual `WARNING` threshold. Seeing it in bursts right after a deploy is normal; every connected client is reconnecting. When the session expired instead, that line is preceded by `Session <id> idle timeout`, also at `INFO`.
+
+## `MCPError: Method not found`
+
+One side sent a JSON-RPC request the other has no handler for, and `e.error.data` names the method. The usual cause is an **era mismatch**: a method that exists in one protocol revision and not in the other, sent to a peer on the wrong one, such as a `2025`-era `resources/subscribe` arriving at a `2026-07-28` connection, or a `2026`-only `subscriptions/listen` sent by a client pinned to `mode="legacy"`. **[Protocol versions](https://py.sdk.modelcontextprotocol.io/protocol-versions/index.md)** is the map of which side speaks what, and the other honest cause (an optional capability you never registered a handler for) is on **[Completions](https://py.sdk.modelcontextprotocol.io/servers/completions/index.md)**.
+
+One thing does **not** produce this error, despite being a request the modern protocol removed: a tool calling `ctx.elicit()` on a `2026-07-28` connection. The server refuses to *send* that request at all, so what you get instead is `Cannot send 'elicitation/create': ...`, further down this page.
+
+## `MCPError: Client did not declare the form elicitation capability required by resolver '<name>'`
+
+Your server wants to ask the user something, and this client never said it can be asked.
+
+This Bistro asks before it books, through a resolver:
+
+```python title="server.py" hl_lines="15-17 21"
+# docs_src/troubleshooting/tutorial007.py
+from typing import Annotated
+
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Elicit, Resolve
+
+mcp = MCPServer("Bistro")
+
+
+class Confirmation(BaseModel):
+    confirm: bool
+
+
+async def ask_to_confirm(date: str) -> Elicit[Confirmation]:
+    """Resolver: ask the user to confirm the booking."""
+    return Elicit(f"Book a table for {date}?", Confirmation)
+
+
+@mcp.tool()
+async def book_table(date: str, answer: Annotated[Confirmation, Resolve(ask_to_confirm)]) -> str:
+    """Book a table at the bistro."""
+    if answer.confirm:
+        return f"Booked for {date}."
+    return "No booking made."
+```
+
+Serve it in place of the Weather server and call `book_table` from a client that passed no `elicitation_callback`. The resolver refuses up front, because the connected client never declared form elicitation, and `e.error.data` names exactly what is missing:
+
+```json
+{
+  "code": -32021,
+  "message": "Client did not declare the form elicitation capability required by resolver 'server:ask_to_confirm'",
+  "data": {"requiredCapabilities": {"elicitation": {"form": {}}}}
+}
+```
+
+Pass `elicitation_callback=` to `Client(...)`. Registering the callback *is* the capability declaration; there is no second switch:
+
+```python
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp", elicitation_callback=handle_elicitation) as client:
+        result = await client.call_tool("book_table", {"date": "Friday"})
+```
+
+**[Client callbacks](https://py.sdk.modelcontextprotocol.io/client/callbacks/index.md)** lists the others (`sampling_callback`, `list_roots_callback`), each of which is a declaration in the same way.
+
+!!! info
+    `-32021` is `MISSING_REQUIRED_CLIENT_CAPABILITY`, one of three error codes the 2026-07-28
+    spec adds. None of them is an exception class: they all arrive as `MCPError`, and
+    `e.error.code` is where to look. `mcp.types` exports the constants. The other two are
+    `-32020` `HEADER_MISMATCH` (an HTTP header disagrees with the request body it accompanies)
+    and `-32022` `UNSUPPORTED_PROTOCOL_VERSION` (the request named a version this server does not
+    speak). A conforming SDK client cannot produce either, so if you see one, look at whatever is
+    rewriting requests between your client and your server.
+
+## `MCPError: Elicitation not supported`
+
+The same gap as `Client did not declare the form elicitation capability ...`, spelled by the paths that don't check up front: the server needed an elicitation answered, and the connected client registered no `elicitation_callback`.
+
+You see this one from `ctx.elicit()` on a legacy connection, and on any connection at all from a returned multi-round-trip question (**[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**) that reaches a client with no callback to answer it. The fix is identical: pass `elicitation_callback=` to `Client(...)`. There is no version of "the user wasn't asked" that your tool receives as a `decline`; a client that cannot be asked is a failed call, so design your tools for it.
+
+## `MCPError: Cannot send 'elicitation/create': this transport context has no back-channel for server-initiated requests.`
+
+Your handler tried to reach the client mid-request, on a connection whose call has no channel that can carry a request from the server. There are three server configurations that put a call there.
+
+**A `2026-07-28` connection: any transport, always.** The modern protocol has no server-initiated requests at all, so the server refuses before anything is sent. `ctx.elicit()` inside a tool is the classic way to meet this, usually in that tool's very first in-memory **[test](https://py.sdk.modelcontextprotocol.io/get-started/testing/index.md)**, since `Client(mcp)` negotiates `2026-07-28` without being asked. Passing `elicitation_callback=` changes nothing, because no request ever reaches the client for it to answer:
+
+```python title="server.py" hl_lines="16"
+# docs_src/troubleshooting/tutorial006.py
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+
+mcp = MCPServer("Bistro")
+
+
+class Confirmation(BaseModel):
+    confirm: bool
+
+
+@mcp.tool()
+async def book_table(date: str, ctx: Context) -> str:
+    """Book a table at the bistro."""
+    result = await ctx.elicit(f"Book a table for {date}?", schema=Confirmation)
+    if result.action == "accept" and result.data.confirm:
+        return f"Booked for {date}."
+    return "No booking made."
+```
+
+```python
+async def test_book_table() -> None:
+    async with Client(mcp) as client:
+        await client.call_tool("book_table", {"date": "Friday"})
+```
+
+```text
+mcp.shared.exceptions.MCPError: Cannot send 'elicitation/create': this transport context has no back-channel for server-initiated requests.
+```
+
+**A legacy connection on a `stateless_http=True` server.** Statelessness means every request is its own world: no session, no server-to-client stream, and so nowhere to send an `elicitation/create` (or `sampling/createMessage`, or `roots/list`) even for the era that has them:
+
+```python title="server.py" hl_lines="16 23"
+# docs_src/troubleshooting/tutorial008.py
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+
+mcp = MCPServer("Bistro")
+
+
+class Confirmation(BaseModel):
+    confirm: bool
+
+
+@mcp.tool()
+async def book_table(date: str, ctx: Context) -> str:
+    """Book a table at the bistro."""
+    result = await ctx.elicit(f"Book a table for {date}?", schema=Confirmation)
+    if result.action == "accept" and result.data.confirm:
+        return f"Booked for {date}."
+    return "No booking made."
+
+
+# Stateless HTTP: every request is its own world. No channel back to the client.
+app = mcp.streamable_http_app(stateless_http=True)
+```
+
+**A legacy connection on a `json_response=True` server.** The `POST` is answered with one JSON body, and one body carries only the response, so the request-scoped stream a mid-request `ctx.elicit()` needs does not exist here either. The session, its `Mcp-Session-Id`, and its standalone stream are all still there; only the request-scoped channel is gone.
+
+The message names the method it could not send. `NoBackChannelError` is the class the server raises, but the wire carries only the base `MCPError`, so the sentence above is your traceback's last line, not the class name.
+
+For a `2026-07-28` client the fix is the same on all three: don't reach back mid-call. Move the question into a **resolver** (or return an `InputRequiredResult` yourself) and it becomes part of the *response*, which every connection can carry:
+
+```python title="server.py" hl_lines="15-17 21"
+# docs_src/troubleshooting/tutorial007.py
+from typing import Annotated
+
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Elicit, Resolve
+
+mcp = MCPServer("Bistro")
+
+
+class Confirmation(BaseModel):
+    confirm: bool
+
+
+async def ask_to_confirm(date: str) -> Elicit[Confirmation]:
+    """Resolver: ask the user to confirm the booking."""
+    return Elicit(f"Book a table for {date}?", Confirmation)
+
+
+@mcp.tool()
+async def book_table(date: str, answer: Annotated[Confirmation, Resolve(ask_to_confirm)]) -> str:
+    """Book a table at the bistro."""
+    if answer.confirm:
+        return f"Booked for {date}."
+    return "No booking made."
+```
+
+Same question, same `elicitation_callback` on the client. The difference is under the hood: a resolver lets the server *return* the question from the call instead of pushing it, so nothing ever flows server-to-client. That rescues every `2026-07-28` client, whichever of the three configurations the server is in. A *legacy* client is not rescued by the rewrite alone: `2025-11-25` has no way to return a question, so on a legacy connection the resolver still sends `elicitation/create` down the request-scoped channel, and still needs a server that keeps it — neither `stateless_http=True` nor `json_response=True`. **[Elicitation](https://py.sdk.modelcontextprotocol.io/handlers/elicitation/index.md)** covers resolvers; **[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)** covers what happens on the wire.
+
+!!! check
+    The tool with `ctx.elicit()` is not wrong, it is *pre-2026*. Connect with `mode="legacy"`
+    (the classic `initialize` handshake, spec `2025-11-25` and earlier) to a server that is neither
+    `stateless_http=True` nor `json_response=True`, and it works, because the server-to-client
+    channel exists there.
+    **[Protocol versions](https://py.sdk.modelcontextprotocol.io/protocol-versions/index.md)** is the page on what each version has.
+
+## `MCPError: Invalid or expired requestState`
+
+The server could not verify the `requestState` token your client echoed back, so it refused the round.
+
+`requestState` is the opaque resume token a **[multi-round-trip](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)** call carries between legs. `MCPServer` seals it on the way out and verifies every echo, and it verifies *every* inbound `request_state` on `tools/call`, `prompts/get`, and `resources/read`, even for a handler that never mints one. So a token this process didn't seal is refused wherever it lands:
+
+```python
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        await client.call_tool("forecast", {"city": "London"}, request_state="round-1-from-worker-a")
+```
+
+```text
+mcp.shared.exceptions.MCPError: Invalid or expired requestState
+```
+
+The message is deliberately frozen: the wire never reveals which check failed. The reason goes to the **server log**, and reading it is the whole diagnosis:
+
+```text
+WARNING mcp.server.request_state: requestState rejected on tools/call: malformed
+```
+
+The reasons you will actually see:
+
+* **`unknown key`** is the one that matters. The default sealing key is generated at process start, so a retry that lands on a **different worker**, a different instance behind a load balancer, or the same server **after a restart** was sealed under a key this process never had. That is not an attacker; it is the default meeting more than one process.
+* **`audience`**: the token was sealed by an instance with a *different server name*. The name is the seal's default audience claim, so a fleet must share the name (or set an explicit `RequestStateSecurity(audience=...)`) as well as the keys.
+* **`expired`**: the round took longer than the seal's `ttl`, which is 600 seconds and per round, not per call.
+* **`malformed`** / **`codec error`**: the token was altered in transit, or was never a sealed token at all.
+* **`request binding`**: the token came back with a different tool, different arguments, or a different method.
+
+The multi-process fix is one argument (the *same* `keys` on every instance) plus one thing that is not an argument at all: the same server *name* (or an explicit shared `audience=`).
+
+```python
+mcp = MCPServer("Weather", request_state_security=RequestStateSecurity(keys=[key]))
+```
+
+`keys[0]` seals; every key in the list verifies, which is what makes zero-downtime rotation possible. **[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md#protecting-requeststate)** explains what the seal protects and the rotation sequence, and **[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)** walks the whole two-worker failure and its two-part fix.
+
+!!! tip
+    `keys=[...]` refuses a weak key immediately, with an unusually helpful message:
+
+    ```text
+    ValueError: request-state keys must be at least 32 bytes of secret randomness; keys[0] is 7 bytes. Generate one with: python -c "import secrets; print(secrets.token_hex(32))"
+    ```
+
+    Do what it says.
+
+## Still stuck?
+
+* If a message the SDK produced is not on this page, that is a documentation bug worth reporting on its own.
+* Search the [issue tracker](https://github.com/modelcontextprotocol/python-sdk/issues); most error strings appearing there are already someone's write-up.
+* Found nothing? [Open an issue](https://github.com/modelcontextprotocol/python-sdk/issues/new?template=v2-feedback.yaml) with the full traceback, or ask in [#python-sdk-dev on the MCP Contributors Discord](https://discord.gg/6CSzBmMkjX).
+
+## Recap
+
+* `ExceptionGroup: unhandled errors in a TaskGroup` is never the error. Read the **last line**; catching `MCPError` *inside* the `async with Client(...)` block skips the wrapping entirely.
+* `call_tool` does not raise for a failing tool. `Error executing tool ...` and `Unknown tool: ...` are results: check `result.is_error`. No message after the tool name means it crashed, and the traceback is in the server log.
+* `Client must be used within an async context manager` -> use `async with`. `Use @tool() instead of @tool` -> add the parentheses.
+* `Tool already exists:` in the server log is the only sign that two same-named tools collapsed into one.
+* One 421, three spellings: `Server returned an error response` (the python `Client`), `421 Misdirected Request` / `Invalid Host header` (everything else), `Invalid Host header: <host>` (the server log). Fix: `transport_security=TransportSecuritySettings(allowed_hosts=[...])`.
+* `Task group is not initialized` -> a mounted app whose host lifespan never entered `mcp.session_manager.run()`.
+* `Session not found` -> the server restarted or the session expired (`session_idle_timeout`); reconnect.
+* `Cannot send 'elicitation/create': ... no back-channel ...` -> `ctx.elicit()` needs a server-to-client channel: a `2026-07-28` connection never has one, `stateless_http=True` takes away the legacy one, and `json_response=True` takes away the request-scoped one. Use a resolver (a legacy client also needs a server that keeps the channel). Its neighbour `Method not found` is a request for a method the other side's protocol revision doesn't have.
+* `Client did not declare the form elicitation capability ...` and `Elicitation not supported` -> the client is missing `elicitation_callback=`.
+* `Invalid or expired requestState` never says why on the wire. The server log does; `unknown key` means share `RequestStateSecurity(keys=[...])` across workers.
+
+# Translations
+
+Source: https://py.sdk.modelcontextprotocol.io/translations/
+
+This documentation is written in English. To make it useful to more people, we also publish machine-translated editions of it, and this page explains what that means for you and how to help improve them.
+
+## What's available
+
+Translated documentation is currently a **preview** in twelve languages: Deutsch, español, français, हिन्दी, 日本語, 한국어, português (Brasil), русский язык, Türkçe, українська мова, 简体中文 and 繁體中文. Pick one from the language switcher at the top of any page. More languages may follow once these have proved themselves.
+
+The API reference is not translated: the translated site links to the single English one.
+
+## English is the source of truth
+
+If a translated page and its English original disagree, the English page is correct. Every page of a translated site opens with one of three notes saying where it stands:
+
+- **Machine translation** — the page was translated automatically and links to its English original.
+- **Translation behind the English page** — the English original changed after the page was translated. You are still reading that translation, so parts of it may be out of date until it catches up; the note links to the current English page.
+- **Shown in English** — the page has not been translated yet, so you are reading the English text.
+
+## How the translations are made
+
+Translated pages are machine-generated by a tool in this repository from the English pages under `docs/`, guided by two human-written inputs per language: a style guide (register, tone, typography, how to handle jokes and idioms) and a glossary (which terms stay in English, and the required and forbidden renderings for the rest). The generated text is never edited by hand. Every improvement goes into those inputs instead, so it survives the next time the pages are regenerated.
+
+## Reporting a translation problem
+
+Found a wrong term, an awkward sentence, or a translation that says something the English doesn't? [Open an issue](https://github.com/modelcontextprotocol/python-sdk/issues) with the language, the page and the passage; reports from native speakers are especially valuable. If you know the fix, propose it directly as a pull request against that language's style guide (`instructions.md`) or glossary (`glossary.json`) under [`i18n/`](https://github.com/modelcontextprotocol/python-sdk/tree/main/i18n) — the correction then reaches every affected page the next time the translations are regenerated. Problems with the English text itself are fixed in the pages under `docs/`, like any other documentation change.
+
+# Migration Guide
+
+Source: https://py.sdk.modelcontextprotocol.io/migration/
+
+This guide covers the breaking changes introduced in v2 of the MCP Python SDK and how to update your code.
+
+Version 2 of the MCP Python SDK introduces several breaking changes to improve the API, align with the MCP specification, and provide better type safety.
+
+!!! note "Not ready to migrate yet?"
+    The v1.x maintenance line keeps receiving critical bug fixes and security patches, and its
+    documentation is at [/v1/](https://py.sdk.modelcontextprotocol.io/v1/). If your package depends
+    on `mcp`, keep a `<2` upper bound until you've migrated.
+
+## Find your changes
+
+Every section heading below names the API it affects, so searching this page for the symbol your code uses is the fastest route to the change that broke it. The guide lists changes only: an SDK API not mentioned here behaves as it did in v1, and the "what did not change" summaries — [`MCPServer`](#what-is-unchanged-on-mcpserver), [lowlevel `Server`](#lowlevel-server-what-did-not-change), and [auth](#unchanged-auth-surfaces) — spell out the surfaces most migrators stop to check.
+
+### Changes almost every project hits
+
+| Change | First symptom | Section |
+|---|---|---|
+| `FastMCP` renamed to `MCPServer` | `ModuleNotFoundError: No module named 'mcp.server.fastmcp'` (newer 2.x releases follow it with a pointer to this guide) | [`FastMCP` renamed](#fastmcp-renamed-to-mcpserver) |
+| Fields renamed from camelCase to snake_case | `AttributeError: 'Tool' object has no attribute 'inputSchema'` | [snake_case fields](#field-names-changed-from-camelcase-to-snake_case) |
+| `mcp.types` names removed | `ImportError: cannot import name 'Content' from 'mcp.types'` | [Removed types](#removed-type-aliases-and-classes) |
+| `McpError` renamed to `MCPError` | `ImportError: cannot import name 'McpError' from 'mcp'` | [`McpError` renamed](#mcperror-renamed-to-mcperror) |
+| Resource URIs are `str`, not `AnyUrl` | `AttributeError: 'str' object has no attribute 'host'` | [URI type](#resource-uri-type-changed-from-anyurl-to-str) |
+| Message unions (`ServerNotification`, `JSONRPCMessage`, ...) are plain unions, not `RootModel` | `AttributeError: 'LoggingMessageNotification' object has no attribute 'root'` | [`RootModel` → unions](#replace-rootmodel-by-union-types-with-typeadapter-validation) |
+| `streamablehttp_client` removed | `ImportError: cannot import name 'streamablehttp_client'` | [`streamablehttp_client`](#streamablehttp_client-removed) |
+| `httpx` and `httpx-sse` replaced by `httpx2` | `ModuleNotFoundError: No module named 'httpx'`, or `TypeError: Invalid "auth" argument` from `httpx.AsyncClient(auth=provider)` | [`httpx2` swap](#httpx-and-httpx-sse-replaced-by-httpx2) |
+| `Client` defaults to `mode='auto'` | servers log an unexpected `server/discover` request | [`mode='auto'`](#client-defaults-to-modeauto) |
+| Transport parameters moved off the `MCPServer` constructor | `TypeError: MCPServer.__init__() got an unexpected keyword argument 'port'` | [constructor parameters](#transport-specific-parameters-moved-from-mcpserver-constructor-to-runapp-methods) |
+| Sync handlers run on a worker thread | `asyncio.get_running_loop()` in a `def` handler raises `RuntimeError` | [worker threads](#sync-handler-functions-now-run-on-a-worker-thread) |
+| Lowlevel decorators replaced with `on_*` constructor params | `AttributeError: 'Server' object has no attribute 'list_tools'` | [`on_*` handlers](#lowlevel-server-decorator-based-handlers-replaced-with-constructor-on_-params) |
+| Lowlevel return value wrapping removed | bare list or dict returns fail result validation instead of being wrapped | [wrapping removed](#lowlevel-server-automatic-return-value-wrapping-removed) |
+| Lowlevel tool exceptions no longer become `isError: true` results | clients raise a JSON-RPC error instead of seeing the error text | [tool exceptions](#lowlevel-server-tool-handler-exceptions-no-longer-become-calltoolresultis_errortrue) |
+| Roots, Sampling, and Logging deprecated (SEP-2577) | `MCPDeprecationWarning` at call sites | [SEP-2577](#roots-sampling-and-logging-methods-deprecated-sep-2577) |
+
+### Find your area
+
+| If you... | Read |
+|---|---|
+| pin dependencies or use the `mcp` CLI | [Packaging, dependencies, and CLI](#packaging-dependencies-and-cli) |
+| import `mcp.types` or touch protocol types (everyone does) | [Types and wire format](#types-and-wire-format) |
+| run `FastMCP`/`MCPServer` servers | [MCPServer (formerly FastMCP)](#mcpserver-formerly-fastmcp) |
+| use the lowlevel `Server` | [Lowlevel Server](#lowlevel-server), plus [Timeouts take `float` seconds](#timeouts-take-float-seconds-instead-of-timedelta) and [Experimental Tasks support removed](#experimental-tasks-support-removed) under Clients |
+| write client code with `Client` or `ClientSession` | [Clients](#clients), plus [`streamablehttp_client` removed](#streamablehttp_client-removed) under Transports |
+| use stdio or streamable HTTP directly, or maintain a custom transport | [Transports](#transports) |
+| maintain OAuth client auth or a protected server | [OAuth and server auth](#oauth-and-server-auth) |
+| relied on lenient handling of off-schema traffic, or assert on exact wire bytes | [Stricter protocol validation and wire behavior](#stricter-protocol-validation-and-wire-behavior) |
+| test against in-memory server/client pairs | [Testing utilities](#testing-utilities) |
+| use roots, sampling, logging, or client-to-server progress | [Deprecations](#deprecations) |
+| operate servers that 2026-era clients will also connect to | [Notes for 2026-era connections](#notes-for-2026-era-connections) |
+
+## Suggested migration order
+
+1. Update your dependency pins and CLI usage: [Packaging, dependencies, and CLI](#packaging-dependencies-and-cli).
+2. Apply the mechanical renames and import moves: [Types and wire format](#types-and-wire-format).
+3. Port your server surface: [MCPServer (formerly FastMCP)](#mcpserver-formerly-fastmcp) or [Lowlevel Server](#lowlevel-server).
+4. Port your client code: [Clients](#clients).
+5. Update transport setup and auth: [Transports](#transports) and [OAuth and server auth](#oauth-and-server-auth).
+6. Run your tests and check anything that now errors against [Stricter protocol validation and wire behavior](#stricter-protocol-validation-and-wire-behavior) and [Testing utilities](#testing-utilities).
+7. Address deprecation warnings: [Deprecations](#deprecations).
+
+## Packaging, dependencies, and CLI
+
+### Dependency floors raised and new required dependencies
+
+v2 raises the minimum versions of several shared dependencies and adds new required ones. A project that pins any of these below the new floor fails dependency resolution before anything installs (uv reports "No solution found when resolving dependencies"; pip fails similarly).
+
+| Dependency | v1.28.1 | v2 | Change |
+|---|---|---|---|
+| anyio | `>=4.5` | `>=4.9` (Python <3.14) / `>=4.10` (Python >=3.14) | floor raised |
+| pydantic | `>=2.11,<3` (Python <3.14) | `>=2.12` | floor raised on Python <3.14; `<3` cap dropped |
+| sse-starlette | `>=1.6.1` | `>=3.0.0` | floor raised across two majors |
+| typing-extensions | `>=4.9.0` | `>=4.13.0` | floor raised |
+| pywin32 (Windows) | `>=310` (Python <3.14) | `>=311` | floor raised on Python <3.14 |
+| opentelemetry-api | not a dependency | `>=1.28.0` | new required dependency |
+| mcp-types | not a dependency | `==<exact mcp version>` | new, exact-pinned |
+| httpx | `>=0.27.1,<1.0.0` | removed | see [`httpx` and `httpx-sse` replaced by `httpx2`](#httpx-and-httpx-sse-replaced-by-httpx2) |
+| httpx-sse | `>=0.4` | removed | see [`httpx` and `httpx-sse` replaced by `httpx2`](#httpx-and-httpx-sse-replaced-by-httpx2) |
+| httpx2 | not a dependency | `>=2.5.0` | new required dependency |
+| `ws` extra | `websockets>=15.0.1` | removed | see [WebSocket transport removed](#websocket-transport-removed) |
+
+**Before (v1):**
+
+```toml
+dependencies = [
+    "mcp==1.28.1",
+    "sse-starlette>=2,<3",  # own SSE endpoints, pinned to the 2.x API
+]
+```
+
+**After (v2):**
+
+```toml
+dependencies = [
+    "mcp>=2,<3",
+    "sse-starlette>=3",  # absorb sse-starlette's own 2.x -> 3.x changes
+]
+```
+
+Relax or bump any conflicting pins when upgrading. sse-starlette jumps two majors, so a project that imports `sse_starlette` itself must also work through that library's own breaking changes to co-install with mcp v2. `opentelemetry-api` is a new hard dependency because every outbound request now carries a `_meta` envelope used for OpenTelemetry trace propagation; see [Every outbound request now carries a `_meta` envelope](#every-outbound-request-now-carries-a-_meta-envelope-opentelemetry-is-on-by-default). `mcp-types` is exact-pinned to the SDK version; nothing in a v1 tree can conflict with it, but do not pin `mcp-types` independently of `mcp`.
+
+### `httpx` and `httpx-sse` replaced by `httpx2`
+
+The SDK now depends on [`httpx2`](https://pypi.org/project/httpx2/) instead of
+`httpx` and `httpx-sse`. `httpx2` is the next-generation HTTP client (a fork of
+`httpx`) with server-sent events support built in, so the separate `httpx-sse`
+dependency is gone.
+
+The swap changes types, not parameter lists: `streamable_http_client` and `sse_client`
+keep their keyword arguments (covered, with the removed `streamablehttp_client` alias and the
+`get_session_id` callback, under [Transports](#transports)), and only the objects they take
+become `httpx2` types — the pre-built `http_client` you hand `streamable_http_client`,
+`sse_client`'s `auth=` (an `httpx2.Auth`, the base class `OAuthClientProvider` now uses), and
+the client a custom `httpx_client_factory` returns. Import from `httpx2` when building any of
+them:
+
+**Before (v1):**
+
+```python
+import httpx
+
+http_client = httpx.AsyncClient(timeout=httpx.Timeout(30, read=300))
+```
+
+**After (v2):**
+
+```python
+import httpx2
+
+http_client = httpx2.AsyncClient(timeout=httpx2.Timeout(30, read=300))
+```
+
+`httpx2` is API-compatible with `httpx`, so usually only the import name
+changes. To consume SSE directly, use `httpx2.EventSource` (or
+`AsyncClient.sse()`) instead of the `httpx-sse` helpers.
+
+mcp no longer installs `httpx` at all. If your own code imports `httpx` and relied on mcp
+v1 to pull it in, that import now fails with
+`ModuleNotFoundError: No module named 'httpx'` — a traceback that never mentions mcp. Either
+add `httpx` to your own dependencies (the two packages install side by side; only objects
+handed to the SDK via `http_client=` or `auth=` have to be `httpx2` types) or port those
+calls to `httpx2`, whose `Client` and `AsyncClient` are drop-in replacements.
+
+Exception handlers need the same rename: the SDK now raises `httpx2`
+exceptions (`httpx2.ConnectError`, `httpx2.HTTPStatusError`, and so on), and
+this failure mode is silent. If `httpx` is still installed — your own code or another
+package depends on it — an old `except httpx.ConnectError:` block
+keeps importing fine and simply never matches again. Audit `except httpx.`
+clauses and `isinstance` checks along with the imports, and switch test fixtures in the
+same change: `pytest.raises(httpx.ConnectError)`, an `httpx.MockTransport`, or a test-only
+`httpx.Auth` subclass all target the wrong types once the code under test moves to `httpx2`.
+The same identity split applies to objects: `httpx` and `httpx2` types are not
+interchangeable at runtime, so an `httpx.AsyncClient` passed as `http_client` degrades in
+subtle ways (server-initiated messages stop arriving) instead of raising immediately.
+
+Retry and error-classification logic keyed to HTTP status codes needs a look too: through
+the SDK's client, timeouts and non-2xx responses surface as `MCPError` with JSON-RPC codes,
+not `408`s or `httpx.HTTPStatusError` — see the client request timeouts section
+(`REQUEST_TIMEOUT`, `-32001`) under [Clients](#clients) and
+[Streamable HTTP: non-2xx responses now surface as per-request JSON-RPC errors](#streamable-http-non-2xx-responses-now-surface-as-per-request-json-rpc-errors).
+
+The SDK's own auth providers made the same move: `OAuthClientProvider`,
+`ClientCredentialsOAuthProvider`, `PrivateKeyJWTOAuthProvider`, and
+`IdentityAssertionOAuthProvider` now subclass `httpx2.Auth` (v1: `httpx.Auth`),
+so the client you attach one to must be an `httpx2.AsyncClient`. Unlike the
+silent `http_client` degradation, this direction fails loudly at
+construction: `httpx.AsyncClient(auth=provider)` raises
+`TypeError: Invalid "auth" argument`. See [OAuth clients](https://py.sdk.modelcontextprotocol.io/client/oauth-clients/index.md)
+for the `httpx2.AsyncClient(auth=...)` wiring.
+
+The client also identifies itself differently: the default User-Agent is now
+`python-httpx2/<version>`, and log lines come from the `httpx2` and
+`httpcore2.*` loggers, so a `logging.getLogger("httpx")` or
+`logging.getLogger("httpcore")` suppression no longer matches anything — target
+`logging.getLogger("httpx2")` and `logging.getLogger("httpcore2")` instead.
+Telemetry integrations keyed to the `httpx` module (such as OpenTelemetry's
+httpx instrumentation) stop seeing the SDK's traffic as well.
+
+TLS verification also changes: `httpx` validated certificates against the
+bundled `certifi` CA list, while `httpx2` validates against the operating
+system trust store via [`truststore`](https://pypi.org/project/truststore/).
+If your environment has no usable system CA store (some minimal containers),
+or you relied on certifi's bundle specifically, point the standard
+`SSL_CERT_FILE` or `SSL_CERT_DIR` environment variable at a CA bundle
+(`httpx2` honors these before falling back to the system store), or pass an
+explicit `verify=ssl_context` to your `httpx2.AsyncClient`. Passing a CA
+bundle path as `verify="ca.pem"` or using the `cert=` parameter is deprecated
+in `httpx2`; build an `ssl.SSLContext` and configure it instead.
+
+### `mcp dev` and `mcp install` pin the spawned environment to your SDK version
+
+Both commands run your server through a fresh `uv run --with ...` environment. In v1 the
+`mcp` requirement in that command was unpinned, so the spawned environment resolved to the
+newest stable release rather than the version you had installed; while v2 was in
+pre-release, `mcp dev server.py` built a v1 environment that could not import a v2 server.
+Both commands now pin the requirement to the version you are running
+(`mcp==<installed version>`). Source builds and other unpublished versions, which have
+nothing on PyPI to pin to, keep the unpinned form.
+
+## Types and wire format
+
+### `mcp.types` moved to the `mcp-types` package
+
+The protocol wire types now live in a standalone distribution, `mcp-types` (import package
+`mcp_types`). Its only runtime dependencies are `pydantic` and `typing-extensions`, so code
+that just needs to (de)serialize MCP traffic can install it without the full SDK. Its API
+reference is at [`mcp_types`](https://py.sdk.modelcontextprotocol.io/api/mcp_types/).
+
+**If your project depends on `mcp`, nothing changes for you.** `import mcp.types`,
+`from mcp.types import ...`, `from mcp import types`, and `import mcp` followed by
+`mcp.types.Tool` all keep working: `mcp.types` is a permanent alias that mirrors `mcp_types`
+exactly (every name is the same object), and `mcp.types.version` mirrors
+`mcp_types.version` the same way. Keep importing through `mcp` — the package you actually
+depend on — rather than writing `import mcp_types`, which would reach past your declared
+dependency into a transitive one. The old `mcp.shared.version` module was removed; import the
+version registry from `mcp.types.version` instead. The top-level `from mcp import Tool`
+re-exports are unchanged too.
+
+**Import `mcp_types` directly only in a project that depends on `mcp-types` without the
+SDK.** That is the point of the split: tooling and lightweight clients can depend on the
+protocol schema without pulling in `httpx2`, `starlette`, `uvicorn`, and the rest of the
+server/transport stack.
+
+Names that no longer exist (listed under
+[Removed type aliases and classes](#removed-type-aliases-and-classes)) fail on import or
+attribute access with an ordinary `ImportError` / `AttributeError`; the table below names each
+replacement.
+
+The supported import surface is the package plus its `jsonrpc`, `methods`, and `version`
+submodules, and each has both spellings: `mcp.types` / `mcp_types`, `mcp.types.jsonrpc` /
+`mcp_types.jsonrpc`, `mcp.types.methods` / `mcp_types.methods`, and `mcp.types.version` /
+`mcp_types.version` (each `mcp.types` module mirrors its `mcp_types` counterpart, name for
+name, the same objects). Underscore-prefixed submodules (`mcp_types._types`, and the generated
+per-protocol-version packages `mcp_types._v2025_11_25` / `mcp_types._v2026_07_28`) are internal
+validators with unstable class names; don't import from them, under either spelling.
+
+**Before (v1):**
+
+```python
+from mcp.types import Tool, Resource
+from mcp.shared.version import LATEST_PROTOCOL_VERSION
+```
+
+**After (v2), depending on `mcp`:**
+
+```python
+from mcp.types import Tool, Resource  # unchanged
+from mcp.types.version import LATEST_PROTOCOL_VERSION
+```
+
+**After (v2), depending only on `mcp-types` (no SDK):**
+
+```python
+from mcp_types import Tool, Resource
+from mcp_types.version import LATEST_PROTOCOL_VERSION
+```
+
+### Removed type aliases and classes
+
+The following type aliases and classes have been removed from the protocol types (`mcp.types` / `mcp_types`):
+
+| Removed | Replacement |
+|---------|-------------|
+| `Content` | `ContentBlock` |
+| `ResourceReference` | `ResourceTemplateReference` |
+| `Cursor` | Use `str` directly |
+| `MethodT` | Internal TypeVar, not intended for public use |
+| `RequestParamsT` | Internal TypeVar, not intended for public use |
+| `NotificationParamsT` | Internal TypeVar, not intended for public use |
+| `AnyFunction` | Use `Callable[..., Any]` directly |
+| `ClientRequestType`, `ClientNotificationType`, `ClientResultType`, `ServerRequestType`, `ServerNotificationType`, `ServerResultType` | The union is now the bare name: `ClientRequest`, `ClientNotification`, `ClientResult`, `ServerRequest`, `ServerNotification`, `ServerResult` |
+| `TaskExecutionMode`, `TASK_FORBIDDEN`, `TASK_OPTIONAL`, `TASK_REQUIRED`, `TASK_STATUS_*` | Use string literals; `TaskStatus` remains as the literal-union type |
+
+**Before (v1):**
+
+```python
+from mcp.types import Content, ResourceReference, Cursor
+```
+
+**After (v2):**
+
+```python
+from mcp.types import ContentBlock, ResourceTemplateReference
+# Use `str` instead of `Cursor` for pagination cursors
+```
+
+### Field names changed from camelCase to snake_case
+
+All Pydantic model fields in the protocol types now use snake_case names for Python attribute access. The JSON wire format is unchanged — traffic the SDK sends still uses camelCase via Pydantic aliases, but your own `model_dump()` calls now need `by_alias=True` to produce it.
+
+**Before (v1):**
+
+```python
+result = await session.call_tool("my_tool", {"x": 1})
+if result.isError:
+    ...
+
+tools = await session.list_tools()
+cursor = tools.nextCursor
+schema = tools.tools[0].inputSchema
+```
+
+**After (v2):**
+
+```python
+result = await session.call_tool("my_tool", {"x": 1})
+if result.is_error:
+    ...
+
+tools = await session.list_tools()
+cursor = tools.next_cursor
+schema = tools.tools[0].input_schema
+```
+
+Common renames:
+
+| v1 (camelCase) | v2 (snake_case) |
+|----------------|-----------------|
+| `inputSchema` | `input_schema` |
+| `outputSchema` | `output_schema` |
+| `isError` | `is_error` |
+| `nextCursor` | `next_cursor` |
+| `mimeType` | `mime_type` |
+| `structuredContent` | `structured_content` |
+| `serverInfo` | `server_info` |
+| `protocolVersion` | `protocol_version` |
+| `uriTemplate` | `uri_template` |
+| `listChanged` | `list_changed` |
+| `progressToken` | `progress_token` |
+
+The models accept both spellings at construction time, so the old camelCase names still work as constructor kwargs (e.g., `Tool(inputSchema={...})` is accepted), but attribute access must use snake_case (`tool.input_schema`).
+
+**If you serialize models yourself, pass `by_alias=True`.** In v1, `model_dump()` produced wire-format camelCase keys because the fields themselves were camelCase. In v2 the same call emits snake_case keys (`input_schema`, not `inputSchema`), which peers and other MCP implementations will not recognize. No error is raised; the output is silently in the wrong shape.
+
+```python
+tool.model_dump()                                # {"name": ..., "input_schema": ...}
+tool.model_dump(by_alias=True, mode="json")      # {"name": ..., "inputSchema": ...}  (wire format)
+```
+
+Parsing is unaffected: `model_validate()` accepts both camelCase wire JSON and snake_case dumps.
+
+### Extra fields on MCP types are no longer preserved
+
+In v1, MCP protocol types were configured with `extra="allow"`: unknown fields passed to a constructor or received from a peer were kept on the model and re-serialized on output.
+
+In v2, MCP types silently ignore extra fields. Unknown constructor keyword arguments and unknown keys in wire data are dropped during validation — no error is raised, and the values do not round-trip:
+
+```python
+from mcp.types import CallToolRequestParams
+
+params = CallToolRequestParams(
+    name="my_tool",
+    arguments={},
+    unknown_field="value",  # silently ignored, not stored
+)
+"unknown_field" in params.model_dump()  # False
+
+# _meta remains the supported place for custom data, per the MCP spec
+params = CallToolRequestParams(
+    name="my_tool",
+    arguments={},
+    _meta={"my_custom_key": "value", "another": 123},  # OK, preserved
+)
+```
+
+If you relied on extra fields round-tripping through MCP types, move that data into `_meta`.
+
+### Resource URI type changed from `AnyUrl` to `str`
+
+The `uri` field on resource-related types now uses `str` instead of Pydantic's `AnyUrl`. This aligns with the [MCP specification schema](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-11-25/schema.ts) which defines URIs as plain strings (`uri: string`) without strict URL validation. This change allows relative paths like `users/me` that were previously rejected.
+
+**Before (v1):**
+
+```python
+from pydantic import AnyUrl
+from mcp.types import Resource
+
+# uri was typed as AnyUrl; relative paths were rejected
+resource = Resource(name="test", uri=AnyUrl("users/me"))  # Would fail validation
+```
+
+**After (v2):**
+
+```python
+from mcp.types import Resource
+
+# Plain strings accepted
+resource = Resource(name="test", uri="users/me")  # Works
+resource = Resource(name="test", uri="custom://scheme")  # Works
+resource = Resource(name="test", uri="https://example.com")  # Works
+```
+
+If your code passes `AnyUrl` objects to URI fields, convert them to strings:
+
+```python
+# If you have an AnyUrl from elsewhere
+uri = str(my_any_url)  # Convert to string
+```
+
+Affected types:
+
+- `Resource.uri` (and subclass `ResourceLink`)
+- `ReadResourceRequestParams.uri`
+- `ResourceContents.uri` (and subclasses `TextResourceContents`, `BlobResourceContents`)
+- `SubscribeRequestParams.uri`
+- `UnsubscribeRequestParams.uri`
+- `ResourceUpdatedNotificationParams.uri`
+
+The `Client` and `ClientSession` methods `read_resource()`, `subscribe_resource()`, and `unsubscribe_resource()` now only accept `str` for the `uri` parameter. If you were passing `AnyUrl` objects, convert them to strings:
+
+```python
+# Before (v1)
+from pydantic import AnyUrl
+
+await client.read_resource(AnyUrl("test://resource"))
+
+# After (v2)
+await client.read_resource("test://resource")
+# Or if you have an AnyUrl from elsewhere:
+await client.read_resource(str(my_any_url))
+```
+
+URI values you read back are also plain strings now. In v1, fields like `Resource.uri` and `ResourceContents.uri` were `AnyUrl` objects, so attribute access such as `uri.scheme` or `uri.host` worked; in v2 that code raises `AttributeError`. Use `urllib.parse` if you need to parse them. Note that v1 also normalized URIs during validation (for example `https://example.com` became `https://example.com/`), while v2 preserves the string exactly as given, so URIs sent on the wire may differ byte-for-byte from what v1 sent.
+
+### Replace `RootModel` by union types with `TypeAdapter` validation
+
+The following union types are no longer `RootModel` subclasses:
+
+- `ClientRequest`
+- `ServerRequest`
+- `ClientNotification`
+- `ServerNotification`
+- `ClientResult`
+- `ServerResult`
+- `JSONRPCMessage`
+
+This means you can no longer access `.root` on these types or use `model_validate()` directly on them. Instead, use the provided `TypeAdapter` instances for validation.
+
+**Before (v1):**
+
+```python
+from mcp.types import ClientRequest, ServerNotification
+
+# Using RootModel.model_validate()
+request = ClientRequest.model_validate(data)
+actual_request = request.root  # Accessing the wrapped value
+
+notification = ServerNotification.model_validate(data)
+actual_notification = notification.root
+```
+
+**After (v2):**
+
+```python
+from mcp.types import client_request_adapter, server_notification_adapter
+
+# Using TypeAdapter.validate_python()
+request = client_request_adapter.validate_python(data)
+# No .root access needed - request is the actual type
+
+notification = server_notification_adapter.validate_python(data)
+# No .root access needed - notification is the actual type
+```
+
+The same applies when constructing values — the wrapper call is no longer needed:
+
+**Before (v1):**
+
+```python
+await session.send_notification(ClientNotification(InitializedNotification()))
+await session.send_request(ClientRequest(PingRequest()), EmptyResult)
+```
+
+**After (v2):**
+
+```python
+await session.send_notification(InitializedNotification())
+await session.send_request(PingRequest(), EmptyResult)
+
+# Params are constructed as before; only the outer wrapper is gone
+await session.send_notification(
+    CancelledNotification(params=CancelledNotificationParams(request_id=request_id, reason="timeout"))
+)
+```
+
+**Available adapters:**
+
+| Union Type | Adapter |
+|------------|---------|
+| `ClientRequest` | `client_request_adapter` |
+| `ServerRequest` | `server_request_adapter` |
+| `ClientNotification` | `client_notification_adapter` |
+| `ServerNotification` | `server_notification_adapter` |
+| `ClientResult` | `client_result_adapter` |
+| `ServerResult` | `server_result_adapter` |
+| `JSONRPCMessage` | `jsonrpc_message_adapter` |
+
+All adapters are exported from `mcp.types`.
+
+These are ordinary `X | Y` unions of the concrete pydantic classes, so `isinstance(msg, ServerNotification)`, `isinstance(msg, LoggingMessageNotification)`, and `match`/`case` on the member classes keep working (unlike `ElicitationResult`, which became a `TypeAliasType` — see [`isinstance()` checks against `ElicitationResult` raise `TypeError`](#isinstance-checks-against-elicitationresult-raise-typeerror)).
+
+Values the SDK hands you are the member instances themselves, so delete `.root` accesses. A `message_handler`, for example, now receives the notification directly (v1 code fails with `AttributeError: 'LoggingMessageNotification' object has no attribute 'root'`):
+
+```python
+# Before (v1)
+if isinstance(message, ServerNotification):
+    if isinstance(message.root, LoggingMessageNotification):
+        print(message.root.params.data)
+
+# After (v2)
+if isinstance(message, LoggingMessageNotification):
+    print(message.params.data)
+```
+
+Custom transports and `EventStore` implementations follow the same rule: `mcp.shared.message.SessionMessage` takes the member directly (`SessionMessage(JSONRPCNotification(...))`, not `SessionMessage(JSONRPCMessage(JSONRPCNotification(...)))`), and raw JSON parses with `jsonrpc_message_adapter.validate_json(raw)` instead of `JSONRPCMessage.model_validate_json(raw)`.
+
+### `RequestParams.Meta` replaced with `RequestParamsMeta` TypedDict
+
+The nested `RequestParams.Meta` Pydantic model class has been replaced with a top-level `RequestParamsMeta` TypedDict. This affects the `ctx.meta` field in request handlers and any code that imports or references this type.
+
+**Key changes:**
+
+- `RequestParams.Meta` (Pydantic model) → `RequestParamsMeta` (TypedDict)
+- Attribute access (`meta.progressToken`) → Dictionary access (`meta.get("progress_token")`)
+- The `progressToken: ProgressToken | None = None` field is now the `progress_token: NotRequired[ProgressToken]` key
+
+**In request context handlers:**
+
+```python
+# Before (v1)
+@server.call_tool()
+async def handle_tool(name: str, arguments: dict) -> list[TextContent]:
+    ctx = server.request_context
+    if ctx.meta and ctx.meta.progressToken:
+        await ctx.session.send_progress_notification(ctx.meta.progressToken, 0.5, 100)
+
+# After (v2)
+async def handle_call_tool(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    if ctx.meta and "progress_token" in ctx.meta:
+        await ctx.session.send_progress_notification(ctx.meta["progress_token"], 0.5, 100)
+    ...
+
+server = Server("my-server", on_call_tool=handle_call_tool)
+```
+
+The nested `NotificationParams.Meta` class is gone as well. Notification `_meta` is
+now a plain `dict[str, Any]`: pass a dict when constructing params
+(`ProgressNotificationParams(progress_token=..., progress=0.5, _meta={"traceparent": ...})`)
+and read extras with dictionary access (`params.meta["traceparent"]`) instead of
+attribute access. The JSON wire format is unchanged.
+
+### `SUPPORTED_PROTOCOL_VERSIONS` deprecated; `LATEST_PROTOCOL_VERSION` changed meaning
+
+`SUPPORTED_PROTOCOL_VERSIONS` is deprecated — it's now the union of `HANDSHAKE_PROTOCOL_VERSIONS` (initialize-handshake versions) and `MODERN_PROTOCOL_VERSIONS` (per-request-envelope versions). If you were using it to mean "versions the initialize handshake accepts", switch to `HANDSHAKE_PROTOCOL_VERSIONS`. Named scalars derived from these tuples are now exported alongside them — `LATEST_HANDSHAKE_VERSION`, `LATEST_MODERN_VERSION`, `OLDEST_SUPPORTED_VERSION` — so prefer those over indexing the tuples directly. All of these live in `mcp.types.version` (an alias of `mcp_types.version`; previously `mcp.shared.version`): `from mcp.types.version import HANDSHAKE_PROTOCOL_VERSIONS`.
+
+`LATEST_PROTOCOL_VERSION` also changed value and meaning. In v1 it was `"2025-11-25"`, the version the client offered during initialization. In v2 it is the newest revision the SDK speaks in any era, currently `"2026-07-28"`, which the initialize handshake cannot negotiate. If you offered it in a hand-built `initialize` request or compared the negotiated version against it, use `LATEST_HANDSHAKE_VERSION` instead. These tuples really are tuples now (`SUPPORTED_PROTOCOL_VERSIONS` was a `list` in v1), so list-only operations such as concatenating with a list raise `TypeError`.
+
+### `McpError` renamed to `MCPError`
+
+The `McpError` exception class has been renamed to `MCPError` for consistent naming with the MCP acronym style used throughout the SDK.
+
+**Before (v1):**
+
+```python
+from mcp.shared.exceptions import McpError
+
+try:
+    result = await session.call_tool("my_tool")
+except McpError as e:
+    print(f"Error: {e.error.message}")
+```
+
+**After (v2):**
+
+```python
+from mcp.shared.exceptions import MCPError
+
+try:
+    result = await session.call_tool("my_tool")
+except MCPError as e:
+    print(f"Error: {e.message}")
+```
+
+`MCPError` is also exported from the top-level `mcp` package:
+
+```python
+from mcp import MCPError
+```
+
+The constructor signature also changed — it now takes `code`, `message`, and optional `data` directly instead of wrapping an `ErrorData`:
+
+**Before (v1):**
+
+```python
+from mcp.shared.exceptions import McpError
+from mcp.types import ErrorData, INVALID_REQUEST
+
+raise McpError(ErrorData(code=INVALID_REQUEST, message="bad input"))
+```
+
+**After (v2):**
+
+```python
+from mcp.shared.exceptions import MCPError
+from mcp.types import INVALID_REQUEST
+
+raise MCPError(INVALID_REQUEST, "bad input")
+# or, if you already have an ErrorData:
+raise MCPError.from_error_data(error_data)
+```
+
+### `JSONRPCError.id` is now `RequestId | None`
+
+In v1 `JSONRPCError.id` was typed `str | int`, so an error response with `"id": null` failed validation even though JSON-RPC 2.0 allows it (the id is null when the receiver could not determine the request id, e.g. a parse error). In v2 the field is `RequestId | None`: still required, but `None` is accepted, and `jsonrpc_message_adapter` parses a null-id error into a `JSONRPCError`.
+
+**Before (v1):**
+
+```python
+from mcp.types import JSONRPCMessage
+
+# Raised ValidationError: id could not be None
+JSONRPCMessage.model_validate(
+    {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}
+)
+```
+
+**After (v2):**
+
+```python
+from mcp.types import PARSE_ERROR, ErrorData, JSONRPCError, jsonrpc_message_adapter
+
+message = jsonrpc_message_adapter.validate_python(
+    {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}
+)
+assert isinstance(message, JSONRPCError) and message.id is None
+
+# Constructing one: `id` is required but nullable
+JSONRPCError(jsonrpc="2.0", id=None, error=ErrorData(code=PARSE_ERROR, message="Parse error"))
+```
+
+Delete any shim that accepted or synthesized null-id error responses. Code that assumed `error.id` was always a `str | int` must now handle `None`, and tests that pinned v1's rejection of `"id": null` now fail because validation succeeds.
+
+## MCPServer (formerly FastMCP)
+
+### `FastMCP` renamed to `MCPServer`
+
+The `FastMCP` class has been renamed to `MCPServer` to better reflect its role as the main server class in the SDK. Beyond the name and import path, the changes to the class are covered in the sections that follow, and [What is unchanged on `MCPServer`](#what-is-unchanged-on-mcpserver) lists the everyday surface that carries over as-is.
+
+**Before (v1):**
+
+```python
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("Demo")
+```
+
+**After (v2):**
+
+```python
+from mcp.server.mcpserver import MCPServer, Context
+
+mcp = MCPServer("Demo")
+```
+
+`Context` is the type annotation for the `ctx` parameter injected into tools, resources, and prompts (see [`get_context()` removed](#mcpserverget_context-removed) below). The `ctx.fastmcp` property is now `ctx.mcp_server`.
+
+All submodules under `mcp.server.fastmcp.*` are now under `mcp.server.mcpserver.*` with the same structure. Common imports:
+
+- `Image`, `Audio` — from `mcp.server.mcpserver` (or `.utilities.types`)
+- `Icon` — from `mcp.server.mcpserver` or `mcp.types` (not a top-level `mcp` export); its `mimeType` field is now `mime_type` per the [snake_case renames](#field-names-changed-from-camelcase-to-snake_case), though the `mimeType=` kwarg still constructs
+- `Message`, `UserMessage`, `AssistantMessage` — from `mcp.server.mcpserver.prompts.base`
+- `ToolError`, `ResourceError` — from `mcp.server.mcpserver.exceptions`
+- `MCPServerError` (renamed from `FastMCPError`) — from `mcp.server.mcpserver.exceptions`
+
+Importing `mcp.server.fastmcp`, or anything below it, raises `ModuleNotFoundError` (newer 2.x releases include a link to this section in its message), so existing `except ImportError` or `except ModuleNotFoundError` fallbacks around the v1 import keep working.
+
+### What is unchanged on `MCPServer`
+
+Beyond the changes covered in this section, the everyday `FastMCP` surface carries over to `MCPServer` as-is:
+
+- **Decorators.** `@mcp.tool()`, `@mcp.resource()`, `@mcp.prompt()`, and `@mcp.completion()` take the same arguments and handler signatures as v1. The lowlevel [`on_completion` reshape](#lowlevel-server-decorator-based-handlers-replaced-with-constructor-on_-params) applies only to the lowlevel `Server`; a high-level `@mcp.completion()` handler is still called as `(ref, argument, context)`.
+- **Tool return handling.** A returned `CallToolResult` (including an `Annotated[CallToolResult, YourModel]` output schema, and `_meta`) is passed through, `Image` and `Audio` convert to content blocks as before, ready-made content blocks are kept as-is, and dict, list, scalar, and model returns are wrapped into `content` and `structured_content` by the same rules.
+- **Listing and registration methods.** `list_tools()`, `list_resources()`, `list_resource_templates()`, and `list_prompts()` return the same lists and are still what the protocol handlers call, so subclass overrides still take effect. `add_tool()`, `add_resource()`, and `add_prompt()` are unchanged.
+- **Helpers.** `Image.to_image_content()`, `Audio.to_audio_content()`, and the prompt `Message`, `UserMessage`, and `AssistantMessage` classes.
+- **Lifespan.** The `lifespan=` constructor argument and `ctx.request_context.lifespan_context` work as before, and the class is still generic over the lifespan result: `FastMCP[MyState]` becomes `MCPServer[MyState]`. (`Context`'s own type parameters did change; see [`RequestContext` type parameters simplified](#requestcontext-type-parameters-simplified).)
+- **Tool internals.** `Tool`, `Tool.from_function()`, `FuncMetadata`, `ArgModelBase`, and `func_metadata()` keep their v1 shapes; the one change is the now-required `context` argument to `Tool.run()`, described [below](#mcpservercall_tool-read_resource-get_prompt-now-accept-a-context-parameter).
+- **Auxiliary import paths.** `TransportSecuritySettings` (`mcp.server.transport_security`) and `AcceptedElicitation`/`DeclinedElicitation`/`CancelledElicitation` (`mcp.server.elicitation`) have not moved; the server auth surface is inventoried under [Unchanged auth surfaces](#unchanged-auth-surfaces).
+
+### Default server name changed from `FastMCP` to `mcp-server`
+
+A server constructed without a name now defaults to `mcp-server` instead of `FastMCP`. This is the name reported to clients as `serverInfo.name` in the initialize result, so it is visible in client UIs, logs, and monitoring. Nothing raises when this changes; the migrated server simply reports a different identity.
+
+**Before (v1):**
+
+```python
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP()  # serverInfo.name == "FastMCP"
+```
+
+**After (v2):**
+
+```python
+from mcp.server.mcpserver import MCPServer
+
+mcp = MCPServer()  # serverInfo.name == "mcp-server"
+```
+
+If test suites assert on the initialize result, or anything keys configuration or allow-lists off `serverInfo.name`, pass a name explicitly: `MCPServer("FastMCP")` preserves the old value, though a real name for your server is better.
+
+### `MCPServer` constructor: `title`, `description`, and `version` added to the positional parameters
+
+The constructor's positional parameter order changed. v2 inserts `title` and `description` before `instructions`, and `version` after `icons`, so the order is now `name`, `title`, `description`, `instructions`, `website_url`, `icons`, `version`. In v1 the order was `name`, `instructions`, `website_url`, `icons`.
+
+A v1 call that passed `instructions` positionally still runs without error on v2, because both slots are `str | None`. The text silently lands in `title` instead: the server sends it as `serverInfo.title` and stops sending `instructions` in the initialize result, which clients feed to the model.
+
+**Before (v1):**
+
+```python
+from mcp.server.fastmcp import FastMCP
+
+# Second positional parameter is instructions
+mcp = FastMCP("Demo", "You answer questions about the weather.")
+```
+
+**After (v2):**
+
+```python
+from mcp.server.mcpserver import MCPServer
+
+mcp = MCPServer("Demo", instructions="You answer questions about the weather.")
+```
+
+Keep `name` positional and pass everything else by keyword.
+
+### Unversioned servers report an empty version
+
+In v1, a server constructed without a `version` reported the installed `mcp`
+package's version as its own in the `initialize` result's `serverInfo`. In v2
+it reports an empty string instead: the SDK's version is not your server's
+version. Pass `version="..."` to `Server(...)` or `MCPServer(...)` to identify
+your server properly. The field is display-only; nothing breaks either way.
+
+### `mount_path` parameter removed from MCPServer
+
+The `mount_path` parameter has been removed from `MCPServer.__init__()`, `MCPServer.run()`, `MCPServer.run_sse_async()`, and `MCPServer.sse_app()`. It was also removed from the `Settings` class.
+
+This parameter was redundant because the SSE transport already handles sub-path mounting via ASGI's standard `root_path` mechanism. When using Starlette's `Mount("/path", app=mcp.sse_app())`, Starlette automatically sets `root_path` in the ASGI scope, and the `SseServerTransport` uses this to construct the correct message endpoint path.
+
+### Transport-specific parameters moved from MCPServer constructor to run()/app methods
+
+Transport-specific parameters have been moved off the `MCPServer` constructor and onto `run()`, `sse_app()`, and `streamable_http_app()`, so transport configuration is passed when starting or building the server. The rest of the constructor is unchanged: identity (`name`, `instructions`, `website_url`, `icons`, plus the newly added positional `title`, `description`, and `version` covered [above](#mcpserver-constructor-title-description-and-version-added-to-the-positional-parameters)), authentication (`auth`, `token_verifier`, `auth_server_provider`), `lifespan`, `dependencies`, `tools`, `debug`, `log_level`, and the `warn_on_duplicate_*` flags; the new keyword-only parameters (`resources`, `extensions`, `resource_security`, `request_state_security`, `cache_hints`, `subscriptions`, `middleware`) are additive.
+
+**Parameters moved:**
+
+- `host`, `port` - HTTP server binding, on `run()` only. The app factories have no `port` (`streamable_http_app(port=...)` raises `TypeError`; a mounted app binds wherever the outer ASGI server does) but do take `host` (default `"127.0.0.1"`), used only to decide whether DNS rebinding protection auto-enables (see the note below)
+- `sse_path`, `message_path` - SSE transport paths, on `run(transport="sse", ...)` and `sse_app()`
+- `streamable_http_path` - StreamableHTTP endpoint path, on `run(transport="streamable-http", ...)` and `streamable_http_app()`
+- `json_response`, `stateless_http` - StreamableHTTP behavior, same two places; each also removes a server-to-client channel, see [Server-initiated sampling, elicitation, and roots raise `NoBackChannelError`](#server-initiated-sampling-elicitation-and-roots-raise-nobackchannelerror)
+- `max_request_body_size` - HTTP request-body limit, on `run()` for both HTTP transports and on both app methods
+- `event_store`, `retry_interval` - StreamableHTTP event handling, same two places
+- `transport_security` - DNS rebinding protection, on `run()` for both HTTP transports and on both app methods
+
+`run()` is `@overload`ed per transport, so type checkers validate the keywords each transport accepts (`transport="stdio"` takes none); at runtime the HTTP transports raise `TypeError` on an unrecognised keyword when they start.
+
+**Before (v1):**
+
+```python
+from mcp.server.fastmcp import FastMCP
+
+# Transport params in constructor
+mcp = FastMCP("Demo", json_response=True, stateless_http=True)
+mcp.run(transport="streamable-http")
+
+# Or for SSE
+mcp = FastMCP("Server", host="0.0.0.0", port=9000, sse_path="/events")
+mcp.run(transport="sse")
+```
+
+**After (v2):**
+
+```python
+from mcp.server.mcpserver import MCPServer
+
+# Transport params passed to run()
+mcp = MCPServer("Demo")
+mcp.run(transport="streamable-http", host="0.0.0.0", port=9000, json_response=True, stateless_http=True)
+
+# Or for SSE
+mcp = MCPServer("Server")
+mcp.run(transport="sse", host="0.0.0.0", port=9000, sse_path="/events")
+```
+
+**For mounted apps:**
+
+When mounting in a Starlette app, pass transport params to `streamable_http_app()`. As in v1, the host app's lifespan must enter `mcp.session_manager.run()` — a mounted sub-app's own lifespan never runs, so nothing else starts the session manager:
+
+```python
+import contextlib
+
+# Before (v1)
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("App", json_response=True)
+
+# After (v2)
+from mcp.server.mcpserver import MCPServer
+
+mcp = MCPServer("App")
+
+
+# Unchanged from v1: the host app's lifespan runs the session manager
+@contextlib.asynccontextmanager
+async def lifespan(app: Starlette):
+    async with mcp.session_manager.run():
+        yield
+
+
+# Before (v1)
+app = Starlette(routes=[Mount("/", app=mcp.streamable_http_app())], lifespan=lifespan)
+
+# After (v2)
+app = Starlette(routes=[Mount("/", app=mcp.streamable_http_app(json_response=True))], lifespan=lifespan)
+```
+
+Without `lifespan=lifespan` the app starts but every request to the mounted path fails with `RuntimeError: Task group is not initialized. Make sure to use run().` — `mcp.session_manager` is the same public property v1's `FastMCP.session_manager` was, and it still exists only after `streamable_http_app()` has been called, so build the routes at module level and touch the manager only inside the lifespan. See [Add to an existing app](https://py.sdk.modelcontextprotocol.io/run/asgi/index.md) for the full pattern, including several servers in one app.
+
+v2 has no settings object that carries transport configuration, so if the module that configures the server is not the one that builds the ASGI app, carry the keywords yourself, e.g. `build_app = functools.partial(mcp.streamable_http_app, json_response=True, stateless_http=True)` next to the server definition and `Mount("/", app=build_app())` wherever it is mounted.
+
+**Note:** DNS rebinding protection is automatically enabled when `host` is `127.0.0.1`, `localhost`, or `::1` and no `transport_security` is passed. This now happens in `sse_app()` and `streamable_http_app()` instead of the constructor, and because those default to `host="127.0.0.1"`, a mounted app has protection on until you configure it. The auto-allowlist entries are `host:port` patterns (`127.0.0.1:*`, `localhost:*`, `[::1]:*`), so a request whose `Host` header carries no port (some in-process test clients send a bare `Host: localhost`) is rejected with `421 Invalid Host header`. To serve a real hostname, pass `transport_security=TransportSecuritySettings(allowed_hosts=[...], allowed_origins=[...])` (from `mcp.server.transport_security`); [Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md) and [Troubleshooting](https://py.sdk.modelcontextprotocol.io/troubleshooting/index.md) cover the allowlist and the `421` in detail.
+
+`Settings` (what `mcp.settings` holds) now has only the constructor-owned fields: `debug`, `log_level`, the `warn_on_duplicate_*` flags, `dependencies`, `lifespan`, and `auth`. If you were mutating transport values via `mcp.settings` after construction (e.g. `mcp.settings.port = 9000`), pass them to `run()` / `sse_app()` / `streamable_http_app()` instead: assigning a removed field now raises `ValueError: "Settings" object has no field "port"`. `settings.lifespan` is read once, at construction, so reassigning it afterwards has no effect. Once `streamable_http_app()` has been called, the values it was built with live on the runtime objects (e.g. `mcp.session_manager.stateless`, `mcp.session_manager.json_response`).
+
+### `MCP_*` environment variables and `.env` files are no longer read
+
+The `Settings` docstring advertised configuration via `MCP_*` environment variables and a `.env` file (e.g. `MCP_DEBUG=true`), but constructor arguments have always taken precedence, so those environment variables never took effect. `Settings` is now a plain Pydantic model rather than a `pydantic-settings` `BaseSettings`, and `pydantic-settings` is no longer a dependency of the SDK.
+
+If you want environment-driven configuration, read the environment yourself and pass the values to the constructor:
+
+```python
+import os
+
+from mcp.server.mcpserver import MCPServer
+
+mcp = MCPServer("Demo", debug=os.environ.get("MCP_DEBUG") == "true")
+```
+
+If your own code uses `pydantic-settings`, add it to your project's dependencies directly.
+
+### Streamable HTTP request bodies are limited to 4 MiB
+
+V2 applies a 4 MiB default limit to Streamable HTTP POST bodies and returns HTTP 413 before parsing
+the JSON or creating a session when that limit is exceeded.
+
+Most servers need no migration. If your application intentionally accepts larger MCP messages,
+set an explicit byte limit on `run()` or `streamable_http_app()`:
+
+```python
+mcp.run(transport="streamable-http", max_request_body_size=8 * 1024 * 1024)
+```
+
+The limit must be positive and applies to both legacy session-based requests and V2's modern
+single-exchange requests. Keep the smallest value your application actually needs.
+
+### Streamable HTTP: lifespan now entered once at manager startup
+
+When serving streamable HTTP (stateful or `stateless_http=True`), the server's `lifespan` context manager is now entered once when `StreamableHTTPSessionManager.run()` starts, and the resulting state is shared across all sessions and requests. Previously each session (stateful) or each request (stateless) entered and exited `lifespan` independently.
+
+Lifespans that set up process-wide state (connection pools, caches, background tasks) are unaffected — they now run once instead of per session/request. If your lifespan was acquiring per-connection resources, move that acquisition into the handler body; per-connection cleanup belongs on the connection's `exit_stack` (a public way to reach it from high-level `@mcp.tool()` handlers is planned).
+
+### Streamable HTTP: session manager, `EventStore`, and stateless mode unchanged
+
+Beyond the constructor parameters that moved to `run()`/`streamable_http_app()` and the lifespan change above, the server-side Streamable HTTP machinery is as in v1:
+
+- `mcp.server.streamable_http` still exports the `EventStore` ABC (`store_event()`, `replay_events_after()`), `EventMessage`, `EventCallback`, `EventId`, and `StreamId` with unchanged signatures; a custom `EventStore` keeps importing `JSONRPCMessage` from `mcp.types`, unchanged.
+- `StreamableHTTPSessionManager` keeps its constructor and its `run()` / `handle_request()` methods (see [Lowlevel `Server`: what did not change](#lowlevel-server-what-did-not-change)); its `stateless=` parameter is unrelated to the removed [`Server.run(stateless=)` flag](#serverrun-no-longer-takes-a-stateless-flag).
+- `mcp.session_manager` still returns the manager once `streamable_http_app()` has been called, with the same `stateless`, `json_response`, `event_store`, and `retry_interval` attributes.
+- `stateless_http=True` still serves each request with a fresh transport, no `Mcp-Session-Id`, and no state carried between requests; `ctx.close_sse_stream()` and `ctx.close_standalone_sse_stream()` are still available on the handler `Context`.
+
+Only private attributes moved: `mcp._mcp_server` is now `mcp._lowlevel_server` (see [Registering lowlevel handlers from `MCPServer`](#registering-lowlevel-handlers-from-mcpserver)), and `_session_manager` now lives on that lowlevel `Server`. Prefer the public `mcp.session_manager` property to either.
+
+### `MCPServer.get_context()` removed
+
+`MCPServer.get_context()` has been removed. Context is now injected by the framework and passed explicitly — there is no ambient ContextVar to read from.
+
+**If you were calling `get_context()` from inside a tool/resource/prompt:** use the `ctx: Context` parameter injection instead.
+
+**Before (v1):**
+
+```python
+@mcp.tool()
+async def my_tool(x: int) -> str:
+    ctx = mcp.get_context()
+    await ctx.report_progress(1, 2)
+    return str(x)
+```
+
+**After (v2):**
+
+```python
+from mcp.server.mcpserver import Context
+
+@mcp.tool()
+async def my_tool(x: int, ctx: Context) -> str:
+    await ctx.report_progress(1, 2)
+    return str(x)
+```
+
+### Sync handler functions now run on a worker thread
+
+In v1, a synchronous (`def`) tool, resource, or prompt function was called inline on the event
+loop, so a body that blocked (an HTTP call with a sync client, `time.sleep()`, heavy
+computation) stalled every other in-flight request on the server. In v2 the SDK runs
+synchronous handler functions in a worker thread via `anyio.to_thread.run_sync()`;
+`async def` handlers are unchanged. Resolver functions (`Resolve(...)`) follow the same rule.
+
+Most servers simply gain concurrency. Port with care if a synchronous handler relied on
+running on the event-loop thread:
+
+- Thread-affine state (thread locals shared with startup code, non-thread-safe objects that
+  were only ever touched from the event loop's thread) is now touched from a worker thread.
+- `asyncio.get_running_loop()` inside a synchronous handler body raises `RuntimeError`; there
+  is no running loop in a worker thread.
+- Synchronous handlers can run concurrently with each other, up to anyio's default
+  worker-thread limit.
+
+Declare the handler `async def` to keep it on the event loop.
+
+### `MCPServer.call_tool()` returns `CallToolResult`
+
+`MCPServer.call_tool()` now returns a `CallToolResult` (or an
+`InputRequiredResult` when a multi-round tool requests further input). It previously
+advertised `Sequence[ContentBlock] | dict[str, Any]` and leaked the internal
+conversion shapes (a bare content sequence or a `(content, structured_content)`
+tuple), forcing callers to re-assemble a `CallToolResult` themselves.
+
+If you call `MCPServer.call_tool()` directly, read `.content` and
+`.structured_content` off the returned `CallToolResult` instead of branching on
+the result type.
+
+### `MCPServer.get_prompt()` and `read_resource()` may return `InputRequiredResult`
+
+Like `call_tool()` above, `MCPServer.get_prompt()` now returns
+`GetPromptResult | InputRequiredResult` and `MCPServer.read_resource()` returns
+`Iterable[ReadResourceContents] | InputRequiredResult`: at 2026-07-28 an
+`@mcp.prompt()` function or an `@mcp.resource()` template function may answer
+with an `InputRequiredResult` to request client input first (see
+[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)). If you call these
+methods directly, narrow with `isinstance` (or
+`assert not isinstance(result, InputRequiredResult)` when your prompt and
+resource functions never return one). `Prompt.render()` and
+`ResourceTemplate.create_resource()` carry the same union.
+
+`ctx.read_resource()` inside a handler is unchanged: it still returns content,
+and raises `RuntimeError` if the resource requests input.
+
+### `MCPServer.call_tool()`, `read_resource()`, `get_prompt()` now accept a `context` parameter
+
+`MCPServer.call_tool()`, `MCPServer.read_resource()`, and `MCPServer.get_prompt()` now accept an optional `context: Context | None = None` parameter. The framework passes this automatically during normal request handling. If you call these methods directly and omit `context`, a Context with no active request is constructed for you — tools that don't use `ctx` work normally, but any attempt to use `ctx.session`, `ctx.request_id`, etc. will raise.
+
+The internal layers (`ToolManager.call_tool`, `Tool.run`, `Prompt.render`, `ResourceTemplate.create_resource`, etc.) now require `context` as a positional argument.
+
+### Resolver-routed requests require the client capability on every protocol version
+
+A v1 server could send elicitation, sampling, and roots requests to clients
+that never declared the matching capability; only tools-bearing sampling was
+checked. In v2 the `Resolve(...)` markers (`Elicit`, `Sample`, `ListRoots`)
+enforce the spec's egress rule: an undeclared capability (form-mode `elicitation`,
+`sampling`, or `roots`, plus `sampling.tools` when the request carries `tools`
+or `tool_choice`) fails the call with a `-32021`
+`MISSING_REQUIRED_CLIENT_CAPABILITY` JSON-RPC error instead of sending a
+request the client cannot handle. This applies on 2025-11-25 sessions with a
+live back-channel too; a pre-`2026-07-28` session with no back-channel
+(stateless HTTP, or streamable HTTP with `json_response=True`) keeps failing
+with its no-back-channel error. At `2026-07-28` a resolver never uses a
+back-channel — it answers with an `InputRequiredResult` — so the `-32021`
+check applies there unconditionally. To migrate, declare the capability: the SDK client
+declares `elicitation`, `sampling`, and `roots` when the matching callback is
+set, and `sampling.tools` needs an explicit
+`Client(sampling_capabilities=SamplingCapability(tools=...))`. Direct
+`ctx.elicit()` and `ctx.session.*` calls outside resolvers keep their previous
+behavior, including the pre-existing tools check on `create_message`.
+
+### `MCPError` raised from an `@mcp.tool()` handler now surfaces as a JSON-RPC error
+
+Raising `MCPError` (or any subclass) inside an `@mcp.tool()` handler now
+produces a top-level JSON-RPC error response with the raised `code`, `message`,
+and `data` intact. Previously the tool wrapper caught it like any other
+exception and returned `CallToolResult(isError=True)`, which discarded the
+error code and structured `data`. The one exception was
+`UrlElicitationRequiredError`, which v1 already re-raised as a JSON-RPC error;
+its behavior is unchanged.
+
+`MCPError` carries `ErrorData` and is the SDK's protocol-error type — raise it
+when the request itself should be rejected (missing client capability,
+elicitation required, invalid parameters). For tool *execution* failures the
+calling LLM should see and react to, raise `ToolError` or return
+`CallToolResult(is_error=True, ...)` directly.
+
+The client sees this change too. `Client.call_tool()` and
+`ClientSession.call_tool()` raise on a JSON-RPC error response, so a tool that
+rejects with `MCPError` now raises `MCPError` on the calling side (`code`,
+`message`, and `data` intact) instead of returning a `CallToolResult` with
+`isError=True` and the message in `content`:
+
+```python
+# Before (v1)
+result = await session.call_tool("book_flight", {"date": "yesterday"})
+if result.isError:
+    ...  # error text is in result.content
+
+# After (v2)
+try:
+    result = await client.call_tool("book_flight", {"date": "yesterday"})
+except MCPError as e:
+    ...  # e.code, e.message, e.data
+```
+
+### Resource not found returns `-32602` and resource lookups raise typed exceptions (SEP-2164)
+
+Reading a missing resource now returns JSON-RPC error code `-32602` (invalid params) with the requested URI in `error.data` (`{"uri": ...}`), per [SEP-2164](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2164). Previously the server returned code `0` with no `data`. Clients can now reliably distinguish not-found from other errors; a resource handler (static or template) that raises `ResourceNotFoundError` (from `mcp.server.mcpserver.exceptions`) produces this same response.
+
+The underlying lookups now raise typed exceptions instead of `ValueError`. `ResourceManager.get_resource()` raises `ResourceNotFoundError` when no resource or template matches the URI, and `ResourceTemplate.create_resource()` raises `ResourceError` when the template function fails. Neither subclasses `ValueError`, so callers catching `ValueError` should switch to `ResourceNotFoundError` / `ResourceError` (both importable from `mcp.server.mcpserver.exceptions`; `ResourceNotFoundError` subclasses `ResourceError`).
+
+### `Resource` classes reject unknown keyword arguments
+
+The `Resource` base class now sets `extra="forbid"`, so every resource class — `TextResource`, `BinaryResource`, `FunctionResource`, `FileResource`, `HttpResource`, `DirectoryResource`, and your own subclasses — raises `ValidationError` on an unrecognised keyword argument instead of silently dropping it. Previously a typo'd or since-removed parameter (such as `FileResource(is_binary=...)`, below) was accepted and ignored. Remove any stray keyword arguments; if a subclass needs to accept arbitrary extras, set its own `model_config = ConfigDict(extra="allow")`.
+
+### `FileResource.is_binary` replaced by `encoding`
+
+`FileResource` used to take `is_binary: bool` and guess its default from `mime_type` (`text/*` → text, anything else → bytes). Two problems fell out of that: `is_binary=False` could not actually be set — `False` doubled as the "not given" sentinel, so `mime_type="application/json"` always came back as a base64 blob — and text reads used `Path.read_text()` with no encoding, i.e. the platform locale (cp1252 on Windows).
+
+The field is now `encoding: str | None`. A string means "decode with this encoding and serve as text"; `None` means "read bytes and serve as a blob". When omitted it defaults to the `charset` declared in `mime_type` if there is one, otherwise `"utf-8-sig"` for textual mime types (`text/*`, `application/json`, `application/xml`, and any `+json`/`+xml` suffix) and `None` for everything else, so JSON and XML files are now served as text without any configuration. `utf-8-sig` is plain UTF-8 that also drops a byte-order mark if the file has one; a declared `charset=` is used as-is.
+
+Passing the removed `is_binary=` argument now raises a `ValidationError` at construction (see the section above) rather than being silently ignored. A misspelled `encoding` also fails at construction rather than on the first read.
+
+Two edge cases to check. A non-UTF-8 file with a *newly* textual mime type (say a UTF-16 `application/xml`) previously shipped byte-exact as a blob and now fails to decode. And an existing `text/*` file that was only readable through your platform's locale encoding (v1 decoded these with the locale, not UTF-8) now fails too. In both cases set `encoding` to the file's real encoding, or `encoding=None` to serve the bytes as a blob.
+
+**Before (v1):**
+
+```python
+FileResource(uri="file:///logo.png", path=logo, mime_type="image/png", is_binary=True)
+FileResource(uri="file:///notes.txt", path=notes)  # text, decoded with the locale encoding
+```
+
+**After (v2):**
+
+```python
+FileResource(uri="file:///logo.png", path=logo, mime_type="image/png")  # bytes, from mime_type
+FileResource(uri="file:///notes.txt", path=notes)  # text, decoded as UTF-8 (BOM tolerated)
+FileResource(uri="file:///data.json", path=data, mime_type="application/json")  # now text, not a blob
+```
+
+Pass `encoding=None` to force a blob, or `encoding="latin-1"` (etc.) to decode a text file that isn't UTF-8.
+
+### Resource templates: matching behavior changes
+
+Resource template matching has been rewritten with [RFC 6570](https://datatracker.ietf.org/doc/html/rfc6570) support.
+Several behaviors have changed:
+
+**Path-safety checks applied by default.** Extracted parameter values
+containing `..` as a path component, a null byte, or looking like an
+absolute path (`/etc/passwd`, `C:\Windows`) now cause the read to
+fail — the client receives an "Unknown resource" error and template
+iteration stops, so a strict template's rejection does not fall
+through to a later permissive template. This is checked on the
+decoded value, so `..%2Fetc`, `%2E%2E`, and `%00` are caught too.
+Note that `..` is only flagged as a standalone path component, so
+values like `v1.0..v2.0` or `HEAD~3..HEAD` are unaffected.
+
+If a parameter legitimately needs to receive absolute paths or
+traversal sequences, exempt it:
+
+```python
+from mcp.server.mcpserver import ResourceSecurity
+
+@mcp.resource(
+    "inspect://file/{+target}",
+    security=ResourceSecurity(exempt_params={"target"}),
+)
+def inspect_file(target: str) -> str: ...
+```
+
+**Template literals and structural delimiters match exactly.** The
+previous matcher built a regex without escaping, so `.` matched any
+character and simple `{var}` swallowed `?`, `#`, `&`, and `,`. Now
+`data://v1.0/{id}` no longer matches `data://v1X0/42`, and
+`api://{id}` no longer matches `api://foo?x=1` — use `api://{id}{?x}`
+to capture the query parameter.
+
+**`{var}` now matches an empty value.** A simple expression captures
+zero or more characters, so `tickets://{ticket_id}` now matches
+`tickets://` with `ticket_id=""` (v1.x's `[^/]+` regex required at
+least one). This makes `match` round-trip `expand` for empty values — RFC 6570
+expands an empty string to nothing — but handlers that assumed a
+non-empty value should validate it explicitly.
+
+**Template syntax errors surface at decoration time.** Unclosed
+braces, duplicate variable names, and unsupported syntax raise
+`InvalidUriTemplate` when the decorator runs rather than `re.error`
+on first match. Two variables with no literal between them are also
+rejected — matching cannot tell where one ends and the next begins —
+so `{name}{+path}` raises. Write `{name}/{+path}`, or use an operator
+that emits its own delimiter: `{+path}{.ext}` is fine because the `.`
+operator contributes a literal `.` between the two. A handler
+parameter bound to a query variable in the template's trailing
+`{?...}`/`{&...}` run — the variables `match()` treats as optional,
+listed by `UriTemplate.query_variable_names` — must declare a Python
+default: a client may omit those, so a handler that requires one now
+raises `ValueError` when the decorator runs instead of failing on the
+first request that leaves it out. (A `{&...}` expression with no
+preceding `{?...}` is not in that run: it is matched strictly, may
+not be omitted, and needs no default.)
+
+**Static URIs with Context-only handlers now error.** A non-template
+URI paired with a handler that takes only a `Context` parameter
+previously registered but was silently unreachable (the resource
+could never be read). This now raises `ValueError` at decoration time
+— resource `Context` injection is only wired up for templates. What to
+do instead depends on why the handler wanted the context. For lifespan
+or application state (what you would read from
+`ctx.request_context.lifespan_context`), a static handler is an
+ordinary function, so read that state from a module-level object (or
+closure) that your `lifespan` populates. For anything on the request
+itself (logging, progress, the session), keep the `Context` parameter
+and add a template variable so the handler registers as a template; an
+optional query variable is enough, and a plain `notes://recent` read
+still matches with the default filled in:
+
+```python
+@mcp.resource("notes://recent{?limit}")
+async def recent_notes(ctx: Context, limit: int = 10) -> str: ...
+```
+
+Such a resource is advertised by `resources/templates/list` rather than
+`resources/list`.
+
+See [URI templates](https://py.sdk.modelcontextprotocol.io/servers/uri-templates/index.md) for the full template syntax,
+security configuration, and filesystem safety utilities.
+
+### `MCPServer`'s `Context` logging: `message` renamed to `data`, `extra` removed
+
+On the high-level `Context` object (`mcp.server.mcpserver.Context`), `log()`, `.debug()`, `.info()`, `.warning()`, and `.error()` now take `data: Any` instead of `message: str`, matching the MCP spec's `LoggingMessageNotificationParams.data` field which allows any JSON-serializable value. The `extra` parameter has been removed from the convenience-method signatures. Note that `extra` never worked at runtime in v1 (the kwargs were forwarded to `log()`, which did not accept them, raising `TypeError`), so this only affects code that type-checked but never exercised that path. Pass structured data directly as `data`.
+
+The lowlevel `ServerSession.send_log_message(data: Any)` already accepted arbitrary data and is unchanged.
+
+`Context.log()` also now accepts all eight [RFC 5424](https://datatracker.ietf.org/doc/html/rfc5424) log levels (`debug`, `info`, `notice`, `warning`, `error`, `critical`, `alert`, `emergency`) via the `LoggingLevel` type, not just the four it previously allowed.
+
+```python
+# Before
+await ctx.info("Connection failed", extra={"host": "localhost", "port": 5432})  # extra= type-checked but raised TypeError at runtime in v1
+await ctx.log(level="info", message="hello")
+
+# After
+await ctx.info({"message": "Connection failed", "host": "localhost", "port": 5432})
+await ctx.log(level="info", data="hello")
+```
+
+Positional calls (`await ctx.info("hello")`) are unaffected.
+
+These helpers are themselves deprecated by [SEP-2577](#roots-sampling-and-logging-methods-deprecated-sep-2577) and emit `mcp.MCPDeprecationWarning` on every call, so treat the rename as a keep-it-working fix rather than a migration target: nothing in-protocol replaces pushing log messages to the client, so log with the standard `logging` module instead (see [Logging](https://py.sdk.modelcontextprotocol.io/handlers/logging/index.md)) and use `ctx.report_progress()` for progress the client should see.
+
+### `Context.client_id` removed
+
+`Context.client_id` has been removed. It never returned an authenticated client identity: it echoed a non-standard `client_id` key from the request's `_meta`, which nothing in the SDK or the MCP spec populates, so it was `None` unless a caller injected `meta={"client_id": ...}` by hand. The name also collided with the OAuth `client_id`, which is what callers usually mean by "the client".
+
+If you were reading a custom `_meta` key, read it from the meta dict directly. If you want the authenticated OAuth client, use the access token:
+
+```python
+# Before (v1)
+client_id = ctx.client_id
+
+# After (v2) — the raw _meta key, if you were setting it yourself
+meta = ctx.request_context.meta
+client_id = meta.get("client_id") if meta else None
+
+# After (v2) — the authenticated OAuth client (usually what you want)
+from mcp.server.auth.middleware.auth_context import get_access_token
+
+token = get_access_token()
+client_id = token.client_id if token else None
+```
+
+### `ProgressContext` and `progress()` context manager removed
+
+The `mcp.shared.progress` module (`ProgressContext`, `Progress`, and the `progress()` context manager) has been removed. This module had no real-world adoption — all users send progress notifications via `Context.report_progress()` or `session.send_progress_notification()` directly.
+
+The replacement is `Context.report_progress(progress, total=None, message=None)` in an `MCPServer` handler, or `ctx.session.report_progress(progress, total, message)` from a lowlevel `Server` handler. Two differences from `ProgressContext.progress(amount, message)`:
+
+- **`report_progress` takes the absolute current value, not a delta.** `ProgressContext.progress(amount)` accumulated into a running total, so calling `p.progress(10)` twice reported `20`. Passing the same deltas to `report_progress` reports `10` twice — progress that jitters instead of increasing, with no error. Keep the running total yourself.
+- `progress()` raised `ValueError` when the request carried no progress token; `report_progress` is a no-op when the caller did not request progress. The optional `message=` argument is unchanged.
+
+**Before (v1):**
+
+```python
+from mcp.shared.progress import progress
+
+with progress(ctx, total=100) as p:
+    await p.progress(25, message="step 1")  # running total: 25
+    await p.progress(25)                    # running total: 50
+```
+
+**After — use `Context.report_progress()` (recommended):**
+
+```python
+@mcp.tool()
+async def my_tool(x: int, ctx: Context) -> str:
+    await ctx.report_progress(25, 100, message="step 1")
+    await ctx.report_progress(50, 100)  # absolute value, not a delta
+    return "done"
+```
+
+**After — lowlevel `Server`:**
+
+```python
+await ctx.session.report_progress(50, 100, message="halfway")
+```
+
+`ctx.session.report_progress()` also works on the in-process `Client(server)` path (see [Testing utilities](#testing-utilities)); `ctx.session.send_progress_notification(progress_token, progress, total, message)` remains for code that reads `ctx.meta["progress_token"]` itself, and takes the same absolute-value `progress`.
+
+### `Context.elicit()` schema gate validates the rendered schema
+
+`Context.elicit()` (and `elicit_with_validation()`) now render the schema first and validate each property against the spec's `PrimitiveSchemaDefinition`, raising `TypeError` at the call site for anything outside it. `Optional[T]` fields render as `{"type": ...}` with the field omitted from `required` (previously the non-spec `anyOf` shape). A bare `list[str]` field is rejected because it renders without the required enum items; use `list[Literal[...]]` or `list[str]` with `json_schema_extra` supplying the items. Unions of multiple primitives (e.g. `int | str`) and nested models are rejected.
+
+A schema-mismatched *accepted* answer also fails differently: the call now raises `ValueError` with a stable message ("Received an accepted elicitation whose content does not match the requested schema") instead of letting pydantic's `ValidationError` escape with its internals. Code that caught `ValidationError` around `ctx.elicit()` should catch `ValueError` (or rely on the tool's error result).
+
+### `isinstance()` checks against `ElicitationResult` raise `TypeError`
+
+`ElicitationResult` is now a `TypeAliasType` instead of a plain union, so `ElicitationResult[Confirm]` works as an annotation (resolver dependency injection consumes it that way - see [Dependencies](https://py.sdk.modelcontextprotocol.io/handlers/dependencies/index.md)). The members are unchanged: `AcceptedElicitation[T] | DeclinedElicitation | CancelledElicitation`.
+
+The one behavioral change: a runtime `isinstance(result, ElicitationResult)` now raises `TypeError`. Check against the member classes directly instead:
+
+```python
+result = await ctx.elicit("Proceed?", Confirm)
+if isinstance(result, AcceptedElicitation):
+    ...  # result.data is a Confirm
+```
+
+Narrowing on `result.action` (`"accept"` / `"decline"` / `"cancel"`) is unaffected. The `TypeError` is specific to `TypeAliasType` aliases like `ElicitationResult`; the `mcp.types` message unions (`ClientRequest`, `ServerNotification`, `JSONRPCMessage`, ...) are ordinary unions and stay `isinstance`-compatible (see [Replace `RootModel` by union types with `TypeAdapter` validation](#replace-rootmodel-by-union-types-with-typeadapter-validation)).
+
+### Registering lowlevel handlers from `MCPServer`
+
+`MCPServer` does not expose public APIs for `subscribe_resource`, `unsubscribe_resource`, or `set_logging_level` handlers. In v1, the workaround was to reach into the private lowlevel server and use its decorator methods:
+
+**Before (v1):**
+
+```python
+@mcp._mcp_server.set_logging_level()  # pyright: ignore[reportPrivateUsage]
+async def handle_set_logging_level(level: str) -> None:
+    ...
+
+mcp._mcp_server.subscribe_resource()(handle_subscribe)  # pyright: ignore[reportPrivateUsage]
+```
+
+In v2, the lowlevel `Server` supports arbitrary request handlers directly via `add_request_handler` (the decorator methods are gone; handlers are otherwise constructor-only). From `MCPServer`, access it via `_lowlevel_server`:
+
+**After (v2):**
+
+```python
+from mcp.server import ServerRequestContext
+from mcp.types import EmptyResult, SetLevelRequestParams, SubscribeRequestParams
+
+
+async def handle_set_logging_level(ctx: ServerRequestContext, params: SetLevelRequestParams) -> EmptyResult:
+    ...
+    return EmptyResult()
+
+
+async def handle_subscribe(ctx: ServerRequestContext, params: SubscribeRequestParams) -> EmptyResult:
+    ...
+    return EmptyResult()
+
+
+mcp._lowlevel_server.add_request_handler("logging/setLevel", SetLevelRequestParams, handle_set_logging_level)  # pyright: ignore[reportPrivateUsage]
+mcp._lowlevel_server.add_request_handler("resources/subscribe", SubscribeRequestParams, handle_subscribe)  # pyright: ignore[reportPrivateUsage]
+```
+
+`_lowlevel_server` is private and may change. A public way to register these handlers on `MCPServer` is planned; until then, use this workaround or use the lowlevel `Server` directly.
+
+## Lowlevel Server
+
+### Lowlevel `Server`: what did not change
+
+Handler registration, signatures, and return values changed (the sections below); the serving scaffolding around them keeps its v1 import paths and call shapes:
+
+- `server.run(read_stream, write_stream, initialization_options)`, including `raise_exceptions=` (narrowed, see [transport errors no longer re-raised](#lowlevel-serverrunraise_exceptionstrue-transport-errors-no-longer-re-raised)). Only the `stateless=` flag is gone (see [`Server.run()` no longer takes a `stateless` flag](#serverrun-no-longer-takes-a-stateless-flag)).
+- `server.create_initialization_options(notification_options=..., experimental_capabilities=...)`, `server.get_capabilities(...)` (its arguments are now optional), and `NotificationOptions(prompts_changed=, resources_changed=, tools_changed=)`. Both methods gained an optional `extensions=` argument. `create_initialization_options()` is still how you build the `InitializationOptions` passed to `run()`; the only value that differs is `server_version` (see [Unversioned servers report an empty version](#unversioned-servers-report-an-empty-version)).
+- `InitializationOptions` (`from mcp.server import InitializationOptions`, also `mcp.server.models`) gained optional `title`/`description` fields; `NotificationOptions` is importable from `mcp.server` and `mcp.server.lowlevel` as before.
+- `lifespan=` keeps its contract — an async-context-manager factory that receives the `Server` and whose yielded value handlers read as `ctx.lifespan_context` — but is now keyword-only (see [constructor parameters are now keyword-only](#lowlevel-server-constructor-parameters-are-now-keyword-only)) and, under streamable HTTP, entered once at manager startup (see [Streamable HTTP: lifespan now entered once at manager startup](#streamable-http-lifespan-now-entered-once-at-manager-startup)).
+- Server-side transports keep their v1 signatures: `mcp.server.stdio.stdio_server()`, `mcp.server.sse.SseServerTransport(endpoint)` (`connect_sse` / `handle_post_message`), and `mcp.server.streamable_http_manager.StreamableHTTPSessionManager`; the one stdio behavior change is [`stdio_server` keeps the protocol streams on private descriptors](#stdio_server-keeps-the-protocol-streams-on-private-descriptors).
+- Import paths: `from mcp.server import Server` (preferred), `from mcp.server.lowlevel import Server`, and `from mcp.server.lowlevel.server import Server` all resolve; only the `request_ctx` contextvar left `mcp.server.lowlevel.server` (see [`request_context` property removed](#lowlevel-server-request_context-property-removed)). `mcp.server.lowlevel.helper_types.ReadResourceContents` still exists (it is `MCPServer.read_resource()`'s return type), but lowlevel `on_read_resource` handlers return `ReadResourceResult` (see [automatic return value wrapping removed](#lowlevel-server-automatic-return-value-wrapping-removed)).
+
+So a v1 `main()` carries over untouched:
+
+```python
+async def main() -> None:
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            server.create_initialization_options(notification_options=NotificationOptions(tools_changed=True)),
+        )
+```
+
+### Lowlevel `Server`: decorator-based handlers replaced with constructor `on_*` params
+
+The lowlevel `Server` class no longer uses decorator methods for handler registration. Instead, handlers are passed as `on_*` keyword arguments to the constructor.
+
+**Before (v1):**
+
+```python
+from mcp.server.lowlevel.server import Server
+import mcp.types as types
+
+server = Server("my-server")
+
+@server.list_tools()
+async def handle_list_tools():
+    return [types.Tool(name="my_tool", description="A tool", inputSchema={})]
+
+@server.call_tool()
+async def handle_call_tool(name: str, arguments: dict):
+    return [types.TextContent(type="text", text=f"Called {name}")]
+```
+
+**After (v2):**
+
+```python
+from mcp.server import Server, ServerRequestContext
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    TextContent,
+    Tool,
+)
+
+async def handle_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams | None) -> ListToolsResult:
+    return ListToolsResult(tools=[Tool(name="my_tool", description="A tool", input_schema={"type": "object"})])
+
+
+async def handle_call_tool(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    return CallToolResult(
+        content=[TextContent(type="text", text=f"Called {params.name}")],
+        is_error=False,
+    )
+
+server = Server("my-server", on_list_tools=handle_list_tools, on_call_tool=handle_call_tool)
+```
+
+**Key differences:**
+
+- Handlers receive `(ctx, params)` instead of the full request object or unpacked arguments. `ctx` is a `ServerRequestContext` with `session` and `lifespan_context` fields (plus `request_id`, `meta`, etc. for request handlers). `params` is the typed request params object.
+- Handlers return the full result type (e.g. `ListToolsResult`) rather than unwrapped values (e.g. `list[Tool]`).
+- The automatic `jsonschema` input/output validation that the old `call_tool()` decorator performed has been removed. There is no built-in replacement — if you relied on schema validation in the lowlevel server, you will need to validate inputs yourself in your handler.
+
+**Complete handler reference:**
+
+All handlers receive `ctx: ServerRequestContext` as the first argument. The second argument and return type are:
+
+| v1 decorator | v2 constructor kwarg | `params` type | return type |
+|---|---|---|---|
+| `@server.list_tools()` | `on_list_tools` | `PaginatedRequestParams \| None` | `ListToolsResult` |
+| `@server.call_tool()` | `on_call_tool` | `CallToolRequestParams` | `CallToolResult` |
+| `@server.list_resources()` | `on_list_resources` | `PaginatedRequestParams \| None` | `ListResourcesResult` |
+| `@server.list_resource_templates()` | `on_list_resource_templates` | `PaginatedRequestParams \| None` | `ListResourceTemplatesResult` |
+| `@server.read_resource()` | `on_read_resource` | `ReadResourceRequestParams` | `ReadResourceResult` |
+| `@server.subscribe_resource()` | `on_subscribe_resource` | `SubscribeRequestParams` | `EmptyResult` |
+| `@server.unsubscribe_resource()` | `on_unsubscribe_resource` | `UnsubscribeRequestParams` | `EmptyResult` |
+| `@server.list_prompts()` | `on_list_prompts` | `PaginatedRequestParams \| None` | `ListPromptsResult` |
+| `@server.get_prompt()` | `on_get_prompt` | `GetPromptRequestParams` | `GetPromptResult` |
+| `@server.completion()` | `on_completion` | `CompleteRequestParams` | `CompleteResult` |
+| `@server.set_logging_level()` | `on_set_logging_level` | `SetLevelRequestParams` | `EmptyResult` |
+| — | `on_ping` | `RequestParams \| None` | `EmptyResult` |
+| `@server.progress_notification()` | `on_progress` | `ProgressNotificationParams` | `None` |
+| — | `on_roots_list_changed` | `NotificationParams \| None` | `None` |
+
+All `params` and return types are importable from `mcp.types`.
+
+**Notification handlers:**
+
+```python
+from mcp.server import Server, ServerRequestContext
+from mcp.types import ProgressNotificationParams
+
+
+async def handle_progress(ctx: ServerRequestContext, params: ProgressNotificationParams) -> None:
+    print(f"Progress: {params.progress}/{params.total}")
+
+server = Server("my-server", on_progress=handle_progress)
+```
+
+Registering `on_progress` emits a deprecation warning because the 2026-07-28 spec deprecates client-to-server progress; see [Client-to-server progress deprecated (2026-07-28)](#client-to-server-progress-deprecated-2026-07-28).
+
+### Lowlevel `Server`: automatic return value wrapping removed
+
+The old decorator-based handlers performed significant automatic wrapping of return values. This magic has been removed — handlers now return fully constructed result types. If you want these conveniences, use `MCPServer` (previously `FastMCP`) instead of the lowlevel `Server`.
+
+**`call_tool()` — structured output wrapping removed:**
+
+The old decorator accepted several return types and auto-wrapped them into `CallToolResult`:
+
+```python
+# Before (v1) — returning a dict auto-wrapped into structured_content + JSON TextContent
+@server.call_tool()
+async def handle(name: str, arguments: dict) -> dict:
+    return {"temperature": 22.5, "city": "London"}
+
+# Before (v1) — returning a list auto-wrapped into CallToolResult.content
+@server.call_tool()
+async def handle(name: str, arguments: dict) -> list[TextContent]:
+    return [TextContent(type="text", text="Done")]
+```
+
+```python
+# After (v2) — construct the full result yourself
+import json
+
+async def handle(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    data = {"temperature": 22.5, "city": "London"}
+    return CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(data, indent=2))],
+        structured_content=data,
+    )
+```
+
+Note: `params.arguments` can be `None` (the old decorator defaulted it to `{}`). Use `params.arguments or {}` to preserve the old behavior.
+
+**`read_resource()` — content type wrapping removed:**
+
+The old decorator auto-wrapped `Iterable[ReadResourceContents]` (and the deprecated `str`/`bytes` shorthand) into `TextResourceContents`/`BlobResourceContents`, handling base64 encoding and mime-type defaulting:
+
+```python
+# Before (v1) — Iterable[ReadResourceContents] auto-wrapped
+from mcp.server.lowlevel.helper_types import ReadResourceContents
+
+@server.read_resource()
+async def handle(uri: AnyUrl) -> Iterable[ReadResourceContents]:
+    return [ReadResourceContents(content="file contents", mime_type="text/plain")]
+
+# Before (v1) — str/bytes shorthand (already deprecated in v1)
+@server.read_resource()
+async def handle(uri: str) -> str:
+    return "file contents"
+
+@server.read_resource()
+async def handle(uri: str) -> bytes:
+    return b"\x89PNG..."
+```
+
+```python
+# After (v2) — construct TextResourceContents or BlobResourceContents yourself
+import base64
+
+async def handle_read(ctx: ServerRequestContext, params: ReadResourceRequestParams) -> ReadResourceResult:
+    # Text content
+    return ReadResourceResult(
+        contents=[TextResourceContents(uri=str(params.uri), text="file contents", mime_type="text/plain")]
+    )
+
+async def handle_read(ctx: ServerRequestContext, params: ReadResourceRequestParams) -> ReadResourceResult:
+    # Binary content — you must base64-encode it yourself
+    return ReadResourceResult(
+        contents=[BlobResourceContents(
+            uri=str(params.uri),
+            blob=base64.b64encode(b"\x89PNG...").decode("utf-8"),
+            mime_type="image/png",
+        )]
+    )
+```
+
+**`list_tools()`, `list_resources()`, `list_prompts()` — list wrapping removed:**
+
+The old decorators accepted bare lists and wrapped them into the result type:
+
+```python
+# Before (v1)
+@server.list_tools()
+async def handle() -> list[Tool]:
+    return [Tool(name="my_tool", ...)]
+
+# After (v2)
+async def handle(ctx: ServerRequestContext, params: PaginatedRequestParams | None) -> ListToolsResult:
+    return ListToolsResult(tools=[Tool(name="my_tool", ...)])
+```
+
+**Using `MCPServer` instead:**
+
+If you prefer the convenience of automatic wrapping, use `MCPServer` which still provides these features through its `@mcp.tool()`, `@mcp.resource()`, and `@mcp.prompt()` decorators. The lowlevel `Server` is intentionally minimal — it provides no magic and gives you full control over the MCP protocol types.
+
+### Lowlevel `Server`: tool handler exceptions no longer become `CallToolResult(is_error=True)`
+
+The v1 `@server.call_tool()` decorator caught any exception raised by the handler and returned it to the client as an error-flagged tool result (`isError: true`), so the calling LLM saw the error text as a tool result and could self-correct. In v2, `on_call_tool` is registered with no exception wrapping: a non-`MCPError` exception propagates to the dispatcher and is answered as a top-level JSON-RPC **error response** with `code=0` and `message=str(exc)`. Typical clients (including the SDK's own) raise on a protocol error instead of returning a result, so the error text is no longer LLM-visible. The server also logs a `handler for 'tools/call' raised` traceback that v1 never emitted.
+
+**Before (v1):**
+
+```python
+@server.call_tool()
+async def call_tool(name: str, arguments: dict):
+    raise ValueError("kaboom")  # client receives CallToolResult(isError=True)
+```
+
+**After (v2):** catch exceptions in the handler and build the error result yourself:
+
+```python
+from mcp.server import Server
+from mcp.types import CallToolResult, TextContent
+
+
+async def handle_call_tool(ctx, params) -> CallToolResult:
+    try:
+        ...  # tool logic
+    except Exception as e:
+        return CallToolResult(
+            content=[TextContent(type="text", text=str(e))],
+            is_error=True,
+        )
+
+
+server = Server("my-server", on_call_tool=handle_call_tool)
+```
+
+Raise `MCPError` only when the request itself should be rejected as a protocol error; that path is deliberate in v2. Alternatively, use `MCPServer`, whose `@mcp.tool()` wrapper still converts generic exceptions into `is_error=True` results (see [`MCPError` raised from an `@mcp.tool()` handler now surfaces as a JSON-RPC error](#mcperror-raised-from-an-mcptool-handler-now-surfaces-as-a-json-rpc-error)).
+
+### Lowlevel `Server`: constructor parameters are now keyword-only
+
+All parameters after `name` are now keyword-only. If you were passing `version` or other parameters positionally, use keyword arguments instead:
+
+```python
+# Before (v1)
+server = Server("my-server", "1.0")
+
+# After (v2)
+server = Server("my-server", version="1.0")
+```
+
+### Lowlevel `Server`: type parameter reduced from 2 to 1
+
+The `Server` class previously had two type parameters: `Server[LifespanResultT, RequestT]`. The `RequestT` parameter has been removed. In v1 it typed the transport-level request object exposed as `server.request_context.request`, not anything handlers received directly.
+
+```python
+# Before (v1)
+from typing import Any
+
+from mcp.server import Server
+
+server: Server[dict[str, Any], Any] = Server(...)
+
+# After (v2)
+from typing import Any
+
+from mcp.server import Server
+
+server: Server[dict[str, Any]] = Server(...)
+```
+
+### Lowlevel `Server`: `request_handlers` and `notification_handlers` attributes removed
+
+The public `server.request_handlers` and `server.notification_handlers` dictionaries have been removed. Handler registration is now done through constructor `on_*` keyword arguments, or through the public `add_request_handler` / `add_notification_handler` methods.
+
+```python
+# Before (v1) — direct dict access
+from mcp.types import ListToolsRequest
+
+server.request_handlers[ListToolsRequest] = handle_list_tools
+
+if ListToolsRequest in server.request_handlers:
+    ...
+
+# After (v2) — no public access to handler dicts
+server = Server("my-server", on_list_tools=handle_list_tools)
+
+if server.get_request_handler("tools/list") is not None:
+    ...
+```
+
+If you need to check whether a handler is registered, use `server.get_request_handler(method)` or `server.get_notification_handler(method)`, which return the registered entry or `None`. Note the lookup key is now the method string (for example `"tools/list"`), not the request type.
+
+### Lowlevel `Server`: `subscribe` capability now correctly reported
+
+Previously, the lowlevel `Server` hardcoded `subscribe=False` in resource capabilities even when a `subscribe_resource()` handler was registered. The `subscribe` capability is now dynamically set to `True` when an `on_subscribe_resource` handler is provided. Clients that previously didn't see `subscribe: true` in capabilities will now see it when a handler is registered, which may change client behavior.
+
+### Lowlevel `Server`: private `_handle_*` dispatch methods removed
+
+`Server._handle_message`, `_handle_request`, and `_handle_notification` have been removed. The receive loop and per-message dispatch now live in `JSONRPCDispatcher` and `ServerRunner`, which `Server.run()` drives internally.
+
+These were private, but some users subclassed `Server` and overrode them to intercept requests. Use middleware instead:
+
+```python
+from typing import Any
+
+from mcp.server import Server, ServerRequestContext
+from mcp.server.context import CallNext, HandlerResult
+
+
+async def logging_middleware(ctx: ServerRequestContext[Any, Any], call_next: CallNext) -> HandlerResult:
+    print(f"handling {ctx.method}")
+    result = await call_next(ctx)
+    print(f"done {ctx.method}")
+    return result
+
+
+server = Server("my-server", on_call_tool=...)
+server.middleware.append(logging_middleware)
+```
+
+The method and the raw inbound params are `ctx.method` and `ctx.params` (`params` is `None` when the message carries none). Middleware runs before params validation and also wraps unknown methods. To rewrite the method or params before the handler runs, pass an adjusted context through: `await call_next(replace(ctx, params=...))`.
+
+**Note:** `Server.middleware` and the `ServerMiddleware` / `CallNext` / `HandlerResult` types in `mcp.server.context` are marked provisional in the source — their signature and semantics may change — so use middleware to observe (log, time, trace) rather than as a foundation. See [Middleware](https://py.sdk.modelcontextprotocol.io/advanced/middleware/index.md).
+
+### Lowlevel `Server.run(raise_exceptions=True)`: transport errors no longer re-raised
+
+`raise_exceptions=True` now only governs handler exceptions: an exception raised by an `on_*` handler propagates out of `run()`. The JSON-RPC error response is still written to the client first, regardless of the flag.
+
+Previously it also re-raised exceptions yielded by the transport onto the read stream (e.g. JSON parse errors). Those are now debug-logged and dropped regardless of `raise_exceptions`. If you relied on `run()` exiting on a transport-level parse error, that no longer happens.
+
+### Cancelled requests are no longer answered
+
+In v1, when the peer sent `notifications/cancelled` for an in-flight request, the receiving side interrupted the handler and answered the request anyway with a JSON-RPC error, `{"code": 0, "message": "Request cancelled"}` - and `0` is not a defined JSON-RPC error code. The 2026-07-28 transport specifications (stdio, streamable HTTP) say a server **MUST NOT** send any further messages for a cancelled request; the older cancellation pattern already said it **SHOULD NOT**. The sender is expected to stop waiting once it cancels, so that error response has been removed: a cancelled request now produces no response at all - no result, and no error - even if the handler runs to completion or fails afterwards. This applies to both seats (the server for cancelled client requests, and the client for cancelled server-initiated requests such as sampling or elicitation).
+
+The one deliberate exception is the 2025-era streamable HTTP transport (`StreamableHTTPServerTransport`), whose wire can end a request's stream only with a response for that id (and stores that response so a resuming client's replay terminates too). Under the 2025 rule, a SHOULD NOT, that transport now terminates a cancelled request with a valid `-32800` error (`mcp.server.streamable_http.REQUEST_CANCELLED`, mirroring LSP's `RequestCancelled`) in place of the old `0`. Nothing else answers.
+
+Nothing changes for callers of the built-in client: abandoning a call (cancelling the awaiting task, or a per-request timeout) never waited for that response. If you send `notifications/cancelled` by hand while still awaiting the call, the call now receives nothing on most transports (over 2025-era streamable HTTP it fails with `REQUEST_CANCELLED`); stop awaiting it yourself, or use a per-request timeout.
+
+### `Server.run()` no longer takes a `stateless` flag
+
+The `stateless: bool` parameter on the lowlevel `Server.run()` has been removed. Stateless serving is now a property of how the connection is constructed (the streamable-HTTP manager builds a born-ready `Connection` per request), not a flag the loop driver inspects.
+
+Server-initiated requests that have no channel to travel on — a legacy session against a `stateless_http=True` server, the request-scoped channel of a stateful legacy session against a `json_response=True` server, or any connection negotiated at 2026-07-28 — now raise `NoBackChannelError` instead of stalling as they did in v1 (the transport silently dropped the outbound message), so a stateless-HTTP or JSON-mode `ctx.elicit()` that used to hang now fails fast; see [Server-initiated sampling, elicitation, and roots raise `NoBackChannelError`](#server-initiated-sampling-elicitation-and-roots-raise-nobackchannelerror) for the exception and the migration paths.
+
+### Lowlevel `Server`: `request_context` property removed
+
+The `server.request_context` property has been removed. Request context is now passed directly to handlers as the first argument (`ctx`). The `request_ctx` module-level contextvar has been removed entirely.
+
+**Before (v1):**
+
+```python
+from mcp.server.lowlevel.server import request_ctx
+
+@server.call_tool()
+async def handle_call_tool(name: str, arguments: dict):
+    ctx = server.request_context  # or request_ctx.get()
+    await ctx.session.send_log_message(level="info", data="Processing...")
+    return [types.TextContent(type="text", text="Done")]
+```
+
+**After (v2):**
+
+```python
+from mcp.server import ServerRequestContext
+from mcp.types import CallToolRequestParams, CallToolResult, TextContent
+
+
+async def handle_call_tool(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    await ctx.session.send_log_message(level="info", data="Processing...")
+    return CallToolResult(
+        content=[TextContent(type="text", text="Done")],
+        is_error=False,
+    )
+```
+
+### `RequestContext` type parameters simplified
+
+`RequestContext` has been removed from `mcp.shared.context` (importing it now raises `ImportError`; the module now holds an unrelated internal class). It is split into `ClientRequestContext` (in `mcp.client.context`) and `ServerRequestContext` (in `mcp.server.context`).
+
+**`RequestContext` changes:**
+
+- The `RequestContext[SessionT, LifespanContextT, RequestT]` generic no longer exists; use `ClientRequestContext` or `ServerRequestContext[LifespanContextT, RequestT]`
+- Server-specific fields (`lifespan_context`, `request`, `close_sse_stream`, `close_standalone_sse_stream`) moved to new `ServerRequestContext` class in `mcp.server.context`
+
+**Before (v1):**
+
+```python
+from mcp.client.session import ClientSession
+from mcp.shared.context import RequestContext, LifespanContextT, RequestT
+
+# RequestContext with 3 type parameters
+ctx: RequestContext[ClientSession, LifespanContextT, RequestT]
+```
+
+**After (v2):**
+
+```python
+from mcp.client.context import ClientRequestContext
+from mcp.server.context import ServerRequestContext, LifespanContextT, RequestT
+
+# For client-side context (sampling, elicitation, list_roots callbacks)
+ctx: ClientRequestContext
+
+# For server-specific context with lifespan and request types
+server_ctx: ServerRequestContext[LifespanContextT, RequestT]
+```
+
+`ServerRequestContext` is a standalone dataclass rather than a specialization of a shared base class. It carries the same fields (`session`, `request_id`, `meta`, `lifespan_context`, `request`, `close_sse_stream`, `close_standalone_sse_stream`) plus new `protocol_version: str`, `method: str`, and raw `params: Mapping[str, Any] | None` fields, so handler code is mostly unaffected, but `isinstance(ctx, RequestContext)` checks and `RequestContext[ServerSession]` annotations need updating to `ServerRequestContext`.
+
+One field is newly optional: `request_id` is now `RequestId | None` (in v1 it was always a `RequestId`). The same context class is passed to notification handlers, where `request_id` is `None`, so code that forwards `ctx.request_id` as a definite `RequestId` needs a `None` check to satisfy type checkers.
+
+`ClientRequestContext` (importable from `mcp.client` or `mcp.client.context`) is smaller: a keyword-only dataclass with just `session: ClientSession`, `request_id: RequestId`, and `meta: RequestParamsMeta | None` — no `lifespan_context` or `request` on the client side. Its `request_id` is always a concrete `RequestId`, since the context is only built for the server-initiated `sampling`, `elicitation`, and `roots` requests it is passed to.
+
+The high-level `Context` class (injected into `@mcp.tool()` etc.) similarly dropped its `ServerSessionT` parameter: `Context[ServerSessionT, LifespanContextT, RequestT]` → `Context[LifespanContextT, RequestT]`. Both remaining parameters have defaults, so bare `Context` is usually sufficient:
+
+**Before (v1):**
+
+```python
+async def my_tool(ctx: Context[ServerSession, None]) -> str: ...
+```
+
+**After (v2):**
+
+```python
+async def my_tool(ctx: Context) -> str: ...
+# or, with an explicit lifespan type:
+async def my_tool(ctx: Context[MyLifespanState]) -> str: ...
+```
+
+The parametrized `Context[MyLifespanState]` annotation currently works only on `@mcp.tool()` handlers. On `@mcp.prompt()` and templated `@mcp.resource("scheme://{param}")` handlers, annotate the parameter as bare `Context` for now: these handlers are wrapped in `pydantic.validate_call`, which re-validates the injected `Context` into a fresh `Context[MyLifespanState]` detached from the request, so the first access to `ctx.request_id`, `ctx.session`, or `ctx.request_context` raises `ValueError: Context is not available outside of a request` (the client sees an internal server error, or `Error creating resource from template ...`). Bare `Context` still exposes `ctx.request_context.lifespan_context`; only its static type is lost.
+
+### `ServerSession` is now a thin proxy (no longer a `BaseSession`)
+
+`ServerSession` no longer subclasses `BaseSession`. It is now a small per-request proxy that exposes `send_request`, `send_notification`, the typed convenience helpers — `create_message`, `elicit` / `elicit_form` / `elicit_url`, `send_elicit_complete`, `list_roots`, `send_log_message`, `send_resource_updated`, `send_resource_list_changed` / `send_tool_list_changed` / `send_prompt_list_changed`, `send_ping`, `send_progress_notification`, and the new `report_progress` — plus `check_client_capability` and the read-only `client_params`, `client_capabilities`, `protocol_version`, and `can_send_request` properties. The receive loop, `initialize` handling, and per-request task isolation that previously lived in `ServerSession` have moved to `JSONRPCDispatcher` and `ServerRunner`.
+
+The helpers keep their v1 signatures, so calls through `ctx.session` are source-compatible: `send_notification(notification, related_request_id=None)`, `send_log_message(level, data, logger=None, related_request_id=None)` (now [SEP-2577-deprecated](#roots-sampling-and-logging-methods-deprecated-sep-2577)), `send_progress_notification(progress_token, progress, total=None, message=None, related_request_id=None)`, `related_request_id=` on `elicit_form` / `elicit_url` / `send_elicit_complete`, and `metadata=ServerMessageMetadata(related_request_id=...)` on `send_request` (used by `create_message`). As in v1, a present `related_request_id` routes the message onto that request's own stream (the POST response in streamable HTTP) and an absent one uses the connection's standalone stream — the one 2026-era exception being `send_log_message`, whose delivery is gated and request-scoped by the spec there (see [Log messages are delivered only to requests that opt in](#log-messages-are-delivered-only-to-requests-that-opt-in)). Two adjustments: `send_resource_updated(uri)` accepts `str | AnyUrl`, and `send_notification` takes the notification model itself — the `types.ServerNotification(...)` wrapper is gone with the other `RootModel` unions (`await session.send_notification(types.ResourceListChangedNotification())`; see [Replace `RootModel` by union types with `TypeAdapter` validation](#replace-rootmodel-by-union-types-with-typeadapter-validation)).
+
+Behavior changes:
+
+- **A new `ServerSession` proxy is built for every inbound message.** In v1 one `ServerSession` lived for the whole connection, and servers commonly keyed per-client state on `ctx.session` identity (a `WeakKeyDictionary[ServerSession, ...]`, `id(ctx.session)`, a set of captured sessions to notify later). In v2 each request and notification gets a fresh proxy over the same connection, so those idioms silently misbehave: a session-keyed dict never finds an earlier key, and a broadcast set grows by one entry per request, sending duplicates. Key on something connection-stable instead — on stateful streamable HTTP the `mcp-session-id` request header names the transport session (read it via `ctx.headers` on `MCPServer` or `ctx.request.headers` in a lowlevel handler); on stdio there is one connection per process. The per-connection object the proxies share is `mcp.server.connection.Connection` (`state`, `session_id`, `exit_stack`), which is not currently reachable from `ctx`.
+- **A captured `ctx.session` stays usable after the handler returns.** The proxy holds the connection, not the request, so a background task can keep calling `send_resource_updated()` / `send_tool_list_changed()` on it while the client stays connected; with `related_request_id` omitted these ride the standalone stream as in v1 — except on a 2026-era connection, where change notifications are dropped and belong on the subscription bus instead ([change notifications travel only on `subscriptions/listen` streams](#change-notifications-travel-only-on-subscriptionslisten-streams)). A request-scoped send is only meaningful while that request is in flight — once the handler returns, that stream is closed and the message is dropped with a debug log.
+- **Notifications after the connection has closed are dropped instead of raising.** In v1 the notification helpers raised `anyio.ClosedResourceError`/`anyio.BrokenResourceError` on a dead connection, and broadcast loops used that exception to prune sessions. In v2 the send returns normally (the drop is debug-logged), so probe with a request instead: `await session.send_ping()` raises `MCPError` once the connection has closed. On a 2026-07-28 connection, though, every server-initiated request raises `NoBackChannelError` (an `MCPError`) regardless, so a ping is a liveness probe only on connections negotiated at 2025-11-25 or earlier.
+
+`ServerSession` is normally constructed for you by `Server.run()` and reached via `ctx.session` in handlers, so beyond the behavior changes above, most servers are unaffected. If you were constructing or subclassing it directly:
+
+**Constructor change:**
+
+```python
+# Before (v1)
+session = ServerSession(read_stream, write_stream, init_options, stateless=False)
+
+# After (v2)
+session = ServerSession(request_outbound, connection)
+# where `request_outbound` is a DispatchContext and `connection` is a Connection
+```
+
+In practice, replace direct `ServerSession` use with `Server.run(read_stream, write_stream, init_options)` and let the framework wire it up.
+
+**Removed from `mcp.server.session`:**
+
+- `InitializationState` enum and `ServerSession._initialization_state` — initialization tracking is now on `Connection` (`connection.initialized` is an `anyio.Event`, `connection.client_params` holds the init params).
+- `ServerRequestResponder` type alias.
+- `ServerSession.incoming_messages` stream — there is no longer a public stream of inbound messages to iterate. Register handlers via the `on_*` constructor params (or `add_request_handler`) and use `Server.middleware` to observe every inbound request and notification (`initialize`, unknown methods, validation failures, and `notifications/initialized` included).
+- `ServerSession.__aenter__` / `__aexit__` — `ServerSession` is no longer an async context manager.
+- The private `_receive_loop`, `_received_request`, `_received_notification`, and `_handle_incoming` overrides — there is nothing to override on `ServerSession` anymore. To intercept inbound messages, use `Server.middleware` (see [Lowlevel `Server`: private `_handle_*` dispatch methods removed](#lowlevel-server-private-_handle_-dispatch-methods-removed)).
+
+### `ServerSession.elicit()` and `elicit_form()` take `requested_schema`, not `requestedSchema`
+
+The schema parameter of `ServerSession.elicit()` and `ServerSession.elicit_form()` was renamed from `requestedSchema` to `requested_schema`. This is a plain method parameter, so the `populate_by_name` alias support that keeps camelCase field names working on Pydantic models does not apply here. Keyword callers raise on every call, before any wire traffic (nothing fails at import; the client sees a tool error):
+
+```text
+TypeError: ServerSession.elicit_form() got an unexpected keyword argument 'requestedSchema'. Did you mean 'requested_schema'?
+```
+
+**Before (v1):**
+
+```python
+result = await ctx.session.elicit_form(
+    message="Your name?",
+    requestedSchema={
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
+    },
+)
+```
+
+**After (v2):**
+
+```python
+result = await ctx.session.elicit_form(
+    message="Your name?",
+    requested_schema={
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
+    },
+)
+```
+
+Positional callers (`session.elicit_form(message, schema)`) are unaffected, and so are the return types: `elicit()`, `elicit_form()`, and `elicit_url()` still return `ElicitResult` (`action` of `"accept"`/`"decline"`/`"cancel"` plus `content`), and `create_message()` still returns `CreateMessageResult` (or `CreateMessageResultWithTools` when `tools`/`tool_choice` are passed). `elicit_url()` already used snake_case parameters in v1; only `elicit()` and `elicit_form()` changed.
+
+## Clients
+
+### `Client` defaults to `mode='auto'`
+
+In v1, connecting to a server always performed the `initialize` handshake. In v2, `Client` defaults to `mode='auto'`: on enter it probes `server/discover` and, if the server doesn't support it, falls back to the `initialize` handshake. Pass `mode='legacy'` to force the initialize handshake and reproduce v1's pre-2026 connection sequence (the per-request wire shape still differs from v1; see [Every outbound request now carries a `_meta` envelope](#every-outbound-request-now-carries-a-_meta-envelope-opentelemetry-is-on-by-default)), or pass a modern protocol-version string (e.g. `mode='2026-07-28'`) to pin a version without probing.
+
+The probe is transport-independent: v2 servers answer it over stdio (and any other stream-pair transport) as well as streamable HTTP, so `mode='auto'` lands on `2026-07-28` against a v2 server on every transport. If your stdio workflow relies on server-initiated requests (sampling, push elicitation, roots), pass `mode='legacy'` — a 2026-07-28 connection refuses them on every transport with `NoBackChannelError` (see [Server-initiated sampling, elicitation, and roots raise `NoBackChannelError`](#server-initiated-sampling-elicitation-and-roots-raise-nobackchannelerror)).
+
+For an in-process `Client(server)` (where `server` is a `Server` or `MCPServer` instance), `mode='auto'` dispatches calls directly through `DirectDispatcher` with no JSON-RPC framing. Pass `mode='legacy'` if you need the in-memory JSON-RPC transport that v1 used — or if the server pushes sampling, elicitation, or roots requests, which the default 2026-07-28 in-process connection refuses with `NoBackChannelError` even when the matching callback is set (see the section linked above). `mode` is a `Client` argument only: a lowlevel `ClientSession` you `initialize()` yourself always performs the pre-2026 handshake, and `ClientSession.discover()` is the explicit 2026-07-28 entry point.
+
+`Client.send_ping()` is deprecated (ping is removed in 2026-07-28) and emits `mcp.MCPDeprecationWarning` when called; pin `mode='legacy'` if you need it. The lowlevel `ClientSession.send_ping()` carries no deprecation marker.
+
+### `ClientSession.get_server_capabilities()` replaced by era-neutral accessors
+
+`ClientSession` now exposes the negotiated server metadata as properties: `server_capabilities`, `server_info`, `instructions`, and `protocol_version`. These are populated by whichever connection step ran (`initialize()` for ≤2025-11-25 servers, `discover()` for 2026-07-28+), and are `None` if none has — matching v1's `get_server_capabilities()`. The `get_server_capabilities()` method has been removed.
+
+**Before (v1):**
+
+```python
+capabilities = session.get_server_capabilities()
+# server_info, instructions, protocol_version were not stored — had to capture initialize() return value
+```
+
+**After (v2):**
+
+```python
+capabilities = session.server_capabilities
+server_info = session.server_info
+instructions = session.instructions
+version = session.protocol_version
+```
+
+The raw handshake result is also retained: `session.initialize_result` is set after `initialize()` (≤2025-11-25 servers — including `stateless_http=True` servers, which still answer `initialize`); `session.discover_result` is set after `discover()` (2026-07-28+ servers). At most one is non-`None`.
+
+On the high-level `Client`, `client.server_capabilities` and `client.protocol_version` are non-nullable inside the context manager. `client.instructions` remains `str | None` since the server may omit it, and `client.server_info` is `Implementation | None`: on 2026-era connections identity is optional wire metadata, so a server that does not report it reads as `None`. (The lowlevel `ClientSession` still lets you call methods before any handshake, as in v1; `Client` always connects on enter — by default it probes `server/discover` and falls back to the initialize handshake.)
+
+### `cursor` parameter removed from `ClientSession` list methods
+
+The deprecated `cursor` parameter has been removed from the following `ClientSession` methods:
+
+- `list_resources()`
+- `list_resource_templates()`
+- `list_prompts()`
+- `list_tools()`
+
+Each method now takes a single keyword-only argument, `params: PaginatedRequestParams | None = None`. Pass `params=PaginatedRequestParams(cursor=...)` to continue from a `next_cursor`; omit `params` for the first page.
+
+**Before (v1):**
+
+```python
+result = await session.list_resources(cursor="next_page_token")
+result = await session.list_tools(cursor="next_page_token")
+```
+
+**After (v2):**
+
+```python
+from mcp.types import PaginatedRequestParams
+
+result = await session.list_resources(params=PaginatedRequestParams(cursor="next_page_token"))
+result = await session.list_tools(params=PaginatedRequestParams(cursor="next_page_token"))
+```
+
+To walk every page, feed each result's `next_cursor` back in until it comes back `None`:
+
+```python
+tools = []
+cursor = None
+while True:
+    page = await session.list_tools(params=PaginatedRequestParams(cursor=cursor))
+    tools.extend(page.tools)
+    if (cursor := page.next_cursor) is None:
+        break
+```
+
+The high-level `Client` (including the `Client(server)` replacement described under [Testing utilities](#testing-utilities)) does not accept `params=` — passing it raises `TypeError`. Its list methods keep pagination as a plain keyword, `await client.list_tools(cursor="next_page_token")`, alongside `meta=` and a per-call `cache_mode=` (`"use"` by default, or `"refresh"`/`"bypass"`) for the client's built-in [response cache](https://py.sdk.modelcontextprotocol.io/client/caching/index.md); `client.session.list_tools(params=...)` reaches the underlying `ClientSession` if you want the `params` form.
+
+### `args` parameter removed from `ClientSessionGroup.call_tool()`
+
+The deprecated `args` parameter has been removed from `ClientSessionGroup.call_tool()`. Use `arguments` instead.
+
+**Before (v1):**
+
+```python
+result = await session_group.call_tool("my_tool", args={"key": "value"})
+```
+
+**After (v2):**
+
+```python
+result = await session_group.call_tool("my_tool", arguments={"key": "value"})
+```
+
+### Timeouts take `float` seconds instead of `timedelta`
+
+Every timeout parameter that took a `datetime.timedelta` in v1 now takes plain seconds as a `float`:
+
+| Surface | v1 type | v2 type |
+|---|---|---|
+| `ClientSession(read_timeout_seconds=...)` | `timedelta \| None` | `float \| None` |
+| `ClientSession.call_tool(read_timeout_seconds=...)` | `timedelta \| None` | `float \| None` |
+| `ClientSession.send_request(request_read_timeout_seconds=...)` | `timedelta \| None` | `float \| None` |
+| `ClientSessionGroup.call_tool(read_timeout_seconds=...)` | `timedelta \| None` | `float \| None` |
+| `ClientSessionParameters.read_timeout_seconds` | `timedelta \| None` | `float \| None` |
+| `StreamableHttpParameters.timeout` / `.sse_read_timeout` | `timedelta` | `float` |
+| `ServerSession.send_request(request_read_timeout_seconds=...)` | `timedelta \| None` | `float \| None` |
+
+`SseServerParameters` already used `float` in v1 and is unaffected.
+
+**Before (v1):**
+
+```python
+from datetime import timedelta
+
+session = ClientSession(read_stream, write_stream, read_timeout_seconds=timedelta(seconds=30))
+result = await session.call_tool("slow_tool", {}, read_timeout_seconds=timedelta(minutes=2))
+
+params = StreamableHttpParameters(
+    url="https://example.com/mcp",
+    timeout=timedelta(seconds=30),
+    sse_read_timeout=timedelta(seconds=300),
+)
+```
+
+**After (v2):**
+
+```python
+session = ClientSession(read_stream, write_stream, read_timeout_seconds=30)
+result = await session.call_tool("slow_tool", {}, read_timeout_seconds=120)
+
+params = StreamableHttpParameters(
+    url="https://example.com/mcp",
+    timeout=30,
+    sse_read_timeout=300,
+)
+```
+
+The failure mode depends on the surface. `StreamableHttpParameters` is a pydantic model, so a leftover timedelta fails loudly at construction (`ValidationError: Input should be a valid number`). The session-path parameters still accept the timedelta at construction or call time; the first request that arms the timeout then crashes inside anyio with `TypeError: unsupported operand type(s) for +: 'float' and 'datetime.timedelta'`, an error that never names the parameter. One narrowing note: v1's `StreamableHttpParameters` coerced bare numbers into timedelta, so v1 code that already passed numbers there keeps working; only explicit-timedelta code breaks.
+
+The same change applies server-side: `ServerSession.send_request(request_read_timeout_seconds=...)`, called from a lowlevel handler via `ctx.session`, is now `float | None`. A v1-style timedelta raises the same anyio `TypeError`, after the request has already been written to the wire, so the handler crashes instead of receiving the response.
+
+To migrate, replace `timedelta(...)` with plain seconds, or mechanically append `.total_seconds()` to an existing timedelta value.
+
+### Client request timeouts now raise `-32001` (`REQUEST_TIMEOUT`) instead of `408`
+
+A client request that exceeds `read_timeout_seconds` still raises the SDK's protocol error (`MCPError`, previously `McpError`), but the error code changed from the HTTP status `408` (`httpx.codes.REQUEST_TIMEOUT`) to the JSON-RPC code `-32001` (`REQUEST_TIMEOUT`, importable from `mcp.types`), matching the TypeScript SDK. The message changed too: v1 said `"Timed out while waiting for response to ClientRequest. Waited 5.0 seconds."`, v2 says `"Request 'tools/call' timed out"`. `MCPError.error` still exists, so a migrated `e.error.code == 408` check runs without error and silently never matches; timeouts fall through to whatever generic-error handling follows. Code that matched on the old message text breaks too. Compare against `REQUEST_TIMEOUT` instead.
+
+**Before (v1):**
+
+```python
+import httpx
+from mcp.shared.exceptions import McpError
+
+try:
+    result = await session.call_tool("slow_tool", {})
+except McpError as e:
+    if e.error.code == httpx.codes.REQUEST_TIMEOUT:  # 408
+        ...  # retry / back off
+    else:
+        raise
+```
+
+**After (v2):**
+
+```python
+from mcp.shared.exceptions import MCPError
+from mcp.types import REQUEST_TIMEOUT  # -32001
+
+try:
+    result = await client.call_tool("slow_tool", {})
+except MCPError as e:
+    if e.code == REQUEST_TIMEOUT:
+        ...  # retry / back off
+    else:
+        raise
+```
+
+`e.error.code` also still works; `e.code` is the v2 convenience property. The constant is importable from `mcp.types` (or from `mcp_types` in a project that uses that package without the SDK). The example uses the high-level `Client`; `ClientSession.call_tool()` raises the same `MCPError`.
+
+### `ClientSession` now runs on `JSONRPCDispatcher`; `BaseSession` removed
+
+`ClientSession`'s public surface is unchanged — same constructor apart from timeout parameters (see [Timeouts take `float` seconds instead of `timedelta`](#timeouts-take-float-seconds-instead-of-timedelta)), typed methods, manual `initialize()`, and async context-manager lifecycle — but `BaseSession`, the v1 receive loop underneath it, is removed with no shim. The engine now lives in `JSONRPCDispatcher` (`mcp.shared.jsonrpc_dispatcher`). To customize client behavior, use the `ClientSession` constructor callbacks, or pass a pre-built dispatcher via the new keyword-only `dispatcher=` constructor argument (e.g. a `DirectDispatcher` for in-process embedding). Passing one of the SDK's own dispatchers (`JSONRPCDispatcher`, or `DirectDispatcher` from `mcp.shared.direct_dispatcher`) is the supported use; the `Dispatcher` protocol's `run()` lifecycle (`mcp.shared.dispatcher`) is documented as provisional, so treat a hand-written implementation as experimental.
+
+Behavior changes:
+
+- **Callbacks and notifications now run concurrently.** In v1 the receive loop processed one inbound message at a time, so callbacks ran inline and in order. Now each delivery starts in arrival order but runs as its own task. Server-initiated request callbacks (`sampling`, `elicitation`, `roots`) no longer block other traffic, may themselves send requests without deadlocking, and are interrupted if the server sends `notifications/cancelled` (no response is sent for the cancelled request). Notification callbacks (`logging_callback`, `progress_callback`, `message_handler`) may interleave, and a `progress_callback` may run after the request it reports on has returned; there is no built-in bound on concurrent deliveries. Transport-level errors reach `message_handler` the same way, and a `message_handler` that raises is logged rather than fatal to the session. Callbacks that need strict sequencing must coordinate themselves.
+- **Notification routing is unchanged.** Each server notification is still delivered to its typed callback first — `logging_callback` for log messages, the per-request `progress_callback` whose `progressToken` matches a request you issued (`progress_callback=` still stamps `params._meta.progressToken` with the outbound request id) — and then teed to `message_handler`. `notifications/cancelled` is applied by the dispatcher and never surfaced, also as in v1.
+- **Cancellation now reaches the server.** Cancelling the task or cancel scope awaiting a request (e.g. `anyio.move_on_after()` around `session.call_tool(...)`), or a request hitting its read timeout, now sends `notifications/cancelled` for that request, so the server interrupts the handler instead of leaving it running; v1 sent nothing ([#2507](https://github.com/modelcontextprotocol/python-sdk/issues/2507)). A test that pinned the v1 gap with a strict `xfail` now passes — drop the marker. The cancelled peer no longer answers at all (v1 sent `ErrorData(code=0, message="Request cancelled")`); the one exception, the 2025-era streamable HTTP transport's `-32800` terminator, is discarded like the v1 error since the caller's waiter is already gone — see [Cancelled requests are no longer answered](#cancelled-requests-are-no-longer-answered). There is no public request-id or cancel handle (v1's private `session._request_id` went with `BaseSession`): cancel the awaiting task or scope and the dispatcher sends the cancel for you.
+- **A raising request callback** is answered with `code=0` and the exception text; v1 flattened every callback exception to `INVALID_PARAMS`. For a specific error response, return `ErrorData` (unchanged) or raise `MCPError`. One carve-out: pydantic's `ValidationError` is still answered with `INVALID_PARAMS`, as in v1.
+- **`send_request` before entering the context manager** raises `RuntimeError` immediately; v1 wrote to the transport and hung until the timeout. After the connection has closed it raises `MCPError` (`CONNECTION_CLOSED`) instead. `send_notification` before entry still works.
+- **`send_notification` after the connection has closed is dropped with a debug log instead of raising.** In v1 the send raised `anyio.BrokenResourceError` (peer gone) or `anyio.ClosedResourceError` (session torn down), and this applied to the typed helpers (`send_roots_list_changed`, `send_progress_notification`) too. Code that used the exception as its disconnect signal should probe with a request instead (`send_request` still raises `MCPError` after close, see above) or scope the sending task to the session's lifetime.
+- **`send_notification` no longer takes `related_request_id`, and `send_request` no longer accepts `ServerMessageMetadata`.** No client transport ever serialized these hints; progress and response correlation via `progressToken` and the request id is unaffected. This is client-side only: the server's `ServerSession` helpers keep `related_request_id` (see [`ServerSession` is now a thin proxy](#serversession-is-now-a-thin-proxy-no-longer-a-basesession)).
+- **Client callbacks now receive `mcp.client.ClientRequestContext`** (its `request_id` is always populated); the `mcp.shared.context.RequestContext` generic is deleted. Annotations spelled `RequestContext[ClientSession, Any]` become `ClientRequestContext` (details in [`RequestContext` type parameters simplified](#requestcontext-type-parameters-simplified)). Otherwise the callback surface is unchanged: the `sampling_callback=`, `elicitation_callback=`, `list_roots_callback=`, `logging_callback=`, and `message_handler=` keywords; the `SamplingFnT`, `ElicitationFnT`, `ListRootsFnT`, `LoggingFnT`, and `MessageHandlerFnT` protocols (still in `mcp.client.session`); and the params/result types (`CreateMessageRequestParams` → `CreateMessageResult | CreateMessageResultWithTools | ErrorData`, `ElicitRequestParams` → `ElicitResult | ErrorData`, `ListRootsResult | ErrorData` — returning `ErrorData` is not new). The `mcp.client.session`, `mcp.client.stdio`, `mcp.client.sse`, and `mcp.client.streamable_http` module paths are unchanged too, so `unittest.mock.patch` string targets still resolve.
+- **`message_handler` no longer receives requests.** Server-initiated requests are answered by the typed callbacks (`sampling_callback`, `elicitation_callback`, `list_roots_callback`), so the handler's parameter is now `IncomingMessage = ServerNotification | Exception`, exported from `mcp.client`. Replace the hand-written v1 union `RequestResponder[ServerRequest, ClientResult] | ServerNotification | Exception` with `IncomingMessage`; `RequestResponder` is gone (below), so the old annotation no longer imports. Delivered notifications are the concrete member instances rather than the v1 `RootModel` wrapper, so drop `.root` (`message.params`, not `message.root.params`); see [Replace `RootModel` by union types with `TypeAdapter` validation](#replace-rootmodel-by-union-types-with-typeadapter-validation).
+
+The `mcp.shared.session` module is gone. `RequestResponder` is removed — `respond()`, the cancellation-tracking members (`cancel()`, the `cancelled` and `in_flight` properties, the `on_complete` constructor argument) and `BaseSession._in_flight` have no replacement; inbound cancellation is handled by `JSONRPCDispatcher`. `ProgressFnT` now lives only in `mcp.shared.dispatcher`, and `RequestId` in `mcp.types`. The module's generic typing helpers (`SendRequestT`, `SendResultT`, `SendNotificationT`, `ReceiveRequestT`, `ReceiveResultT`, `ReceiveNotificationT`) went with it and have no re-export — the sessions are no longer generic; `ClientSession.send_request` takes a concrete request model plus a result model class (or `pydantic.TypeAdapter`), so an override that needs a type parameter can declare its own `TypeVar` bound to `pydantic.BaseModel`.
+
+Subclassing `ClientSession` remains a valid interception point: every typed helper routes through `send_request`, and the notification helpers through `send_notification`, so overriding those two still sees that traffic (the 2026-era `discover()`/`send_discover()` are the exception — they call the dispatcher directly). For wire-level interception, use the `dispatcher=` argument instead (with the caveat above on hand-written dispatchers).
+
+Migrating a request callback is a signature-only change (sampling and roots callbacks have the same shape):
+
+**Before (v1):**
+
+```python
+async def elicitation_callback(
+    context: RequestContext[ClientSession, Any], params: types.ElicitRequestParams
+) -> types.ElicitResult | types.ErrorData: ...
+```
+
+**After (v2):**
+
+```python
+from mcp.client import ClientRequestContext
+from mcp.types import ElicitRequestParams, ElicitResult, ErrorData
+
+
+async def elicitation_callback(
+    context: ClientRequestContext, params: ElicitRequestParams
+) -> ElicitResult | ErrorData: ...
+```
+
+### Experimental Tasks support removed
+
+Tasks ([SEP-1686](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1686)) have been removed from the MCP specification and are no longer part of this SDK. The `mcp.client.experimental`, `mcp.server.experimental`, `mcp.shared.experimental`, and `mcp.server.lowlevel.experimental` modules have been removed, along with the `experimental` properties on `ClientSession`, `ServerSession`, `Server`, and `ServerRequestContext`. The corresponding `Task*` types remain in `mcp.types` as types-only definitions, except the `TaskExecutionMode` alias, whose literal is now inlined on `ToolExecution.task_support`.
+
+The 2026-07-28 revision reintroduces Tasks as an official extension: [SEP-2663](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2663), `io.modelcontextprotocol/tasks`, redesigned around polling (`tasks/get`) instead of a blocking `tasks/result`. This SDK does not implement the extension yet.
+
+There is no drop-in replacement for the tasks runtime (`server.experimental.enable_tasks()`, `ctx.experimental.run_task()`, `ServerTaskContext`, and the client's `session.experimental.call_tool_as_task()` / `poll_task()` / `get_task_result()`); the port depends on what the code used tasks for.
+
+**Status updates on a long-running tool.** Run the work inline in the tool handler and replace `ServerTaskContext.update_status()` with progress reporting: `ctx.report_progress(progress, total, message)` on `MCPServer`, or `ctx.session.report_progress(...)` in a lowlevel handler (a no-op when the caller did not request progress). The client no longer creates a task and polls `tasks/get`; it passes `progress_callback=` to `call_tool()` and receives `notifications/progress` while the single call is in flight.
+
+**Before (v1):**
+
+```python
+# server: hand the work to the task runtime and report status from inside it
+async def work(task: ServerTaskContext) -> types.CallToolResult:
+    await task.update_status("Processing step 1...")
+    ...
+
+result = await ctx.experimental.run_task(work)
+
+# client: create the task, poll its status, then fetch the result
+result = await session.experimental.call_tool_as_task("long_running_task", arguments={}, ttl=60000)
+async for status in session.experimental.poll_task(result.task.taskId):
+    print(status.statusMessage)
+task_result = await session.experimental.get_task_result(result.task.taskId, CallToolResult)
+```
+
+**After (v2):**
+
+```python
+# server
+@mcp.tool()
+async def long_running_task(ctx: Context) -> str:
+    await ctx.report_progress(1, total=3, message="Processing step 1...")
+    ...
+    return "Task completed!"
+
+# client
+async def on_progress(progress: float, total: float | None, message: str | None) -> None:
+    print(message)
+
+result = await client.call_tool("long_running_task", {}, progress_callback=on_progress)
+```
+
+**Gathering user input mid-work** (`task.elicit()`, `task.create_message()`). Don't port these to inline `ctx.elicit()` / `ctx.session.create_message()` calls: those are server-initiated requests, refused with `NoBackChannelError` on 2026-07-28 connections (the default for an in-process `Client(server)`). Use the resolver dependencies (`Elicit`, `Sample`) or return an `InputRequiredResult` — both work on every protocol version, and `Client.call_tool()` retries the `InputRequiredResult` rounds automatically; see [Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md) and [Server-initiated sampling, elicitation, and roots raise `NoBackChannelError`](#server-initiated-sampling-elicitation-and-roots-raise-nobackchannelerror). The client's existing `elicitation_callback` / `sampling_callback` serve both eras.
+
+**Detached work** (create the task now, fetch its result on a later connection or after a client restart) has no v2 equivalent until the SEP-2663 extension is implemented.
+
+Also drop `execution=ToolExecution(taskSupport=types.TASK_REQUIRED)` from tool definitions: the `TASK_REQUIRED` / `TASK_OPTIONAL` / `TASK_FORBIDDEN` constants are gone from `mcp.types` (`ToolExecution.task_support` takes the plain `"required"` / `"optional"` / `"forbidden"` literal), and no v2 client or server reads the field.
+
+## Transports
+
+Server-side transport entry points (`stdio_server()`, `SseServerTransport`, `StreamableHTTPSessionManager`) keep their v1 import paths and signatures (see [Lowlevel `Server`: what did not change](#lowlevel-server-what-did-not-change)), so the sections below are client-side apart from [`stdio_server` keeps the protocol streams on private descriptors](#stdio_server-keeps-the-protocol-streams-on-private-descriptors); the other server-side transport changes ([lifespan entered once](#streamable-http-lifespan-now-entered-once-at-manager-startup), the [4 MiB request-body limit](#streamable-http-request-bodies-are-limited-to-4-mib)) sit under MCPServer.
+
+### `streamablehttp_client` removed
+
+The deprecated `streamablehttp_client` function has been removed. Use `streamable_http_client` instead.
+
+**Before (v1):**
+
+```python
+from mcp.client.streamable_http import streamablehttp_client
+
+async with streamablehttp_client(
+    url="http://localhost:8000/mcp",
+    headers={"Authorization": "Bearer token"},
+    timeout=30,
+    sse_read_timeout=300,
+    auth=my_auth,
+) as (read_stream, write_stream, get_session_id):
+    ...
+```
+
+**After (v2):**
+
+```python
+import httpx2
+from mcp.client.streamable_http import streamable_http_client
+
+# Configure headers, timeout, and auth on the httpx2.AsyncClient
+http_client = httpx2.AsyncClient(
+    headers={"Authorization": "Bearer token"},
+    timeout=httpx2.Timeout(30, read=300),
+    auth=my_auth,
+)
+
+async with http_client:
+    async with streamable_http_client(
+        url="http://localhost:8000/mcp",
+        http_client=http_client,
+    ) as (read_stream, write_stream):
+        ...
+```
+
+v1's internal client set `follow_redirects=True`. You don't need it on your own client: the transport follows a method-preserving redirect within the endpoint's origin (a trailing-slash 307/308, say) itself, and does not follow one anywhere else, whatever the client is configured to do.
+
+`streamable_http_client` itself keeps a small signature — `streamable_http_client(url, *, http_client=None, terminate_on_close=True)` — and now yields a 2-tuple (next section). The removed function's other parameters map onto the client you build:
+
+- `headers`, `timeout`, `sse_read_timeout`, `auth`: set them on the `httpx2.AsyncClient` as above. `streamablehttp_client` defaulted to `httpx.Timeout(30, read=300)`; a bare `httpx2.AsyncClient()` falls back to httpx2's flat 5-second timeout, too short for the long-lived GET stream, so set `timeout=httpx2.Timeout(30, read=300)` (as shown) to keep v1's values. Omitting `http_client` still gives you a default client with those timeouts.
+- `httpx_client_factory`: gone with no replacement — call your factory yourself and pass the result as `http_client`.
+- `terminate_on_close`: unchanged (default `True`).
+
+Client-side stream resumption is also unchanged: the transport reconnects a dropped GET stream with `Last-Event-ID` on its own, and `session.send_request(..., metadata=ClientMessageMetadata(resumption_token=..., on_resumption_token_update=...))` (from `mcp.shared.message`) works as in v1.
+
+### `get_session_id` callback removed from `streamable_http_client`
+
+The `get_session_id` callback (third element of the returned tuple) has been removed from `streamable_http_client`. The function now returns a 2-tuple `(read_stream, write_stream)` instead of a 3-tuple.
+
+The `GetSessionIdCallback` type alias is gone as well, so `from mcp.client.streamable_http import GetSessionIdCallback` now raises `ImportError`. Drop the annotation, or inline `Callable[[], str | None]` if your own wrapper code still needs the type. The `StreamableHTTPTransport.get_session_id()` method that backed the callback is removed too.
+
+If you need to capture the session ID (e.g., for session resumption testing), you can use httpx2 event hooks to capture it from the response headers:
+
+**Before (v1):**
+
+```python
+from mcp.client.streamable_http import streamable_http_client
+
+async with streamable_http_client(url) as (read_stream, write_stream, get_session_id):
+    async with ClientSession(read_stream, write_stream) as session:
+        await session.initialize()
+        session_id = get_session_id()  # Get session ID via callback
+```
+
+**After (v2):**
+
+```python
+import httpx2
+from mcp.client.streamable_http import streamable_http_client
+
+# Option 1: Simply ignore if you don't need the session ID
+async with streamable_http_client(url) as (read_stream, write_stream):
+    async with ClientSession(read_stream, write_stream) as session:
+        await session.initialize()
+
+# Option 2: Capture session ID via httpx2 event hooks if needed
+captured_session_ids: list[str] = []
+
+async def capture_session_id(response: httpx2.Response) -> None:
+    session_id = response.headers.get("mcp-session-id")
+    if session_id:
+        captured_session_ids.append(session_id)
+
+http_client = httpx2.AsyncClient(event_hooks={"response": [capture_session_id]})
+
+async with http_client:
+    async with streamable_http_client(url, http_client=http_client) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
+            session_id = captured_session_ids[0] if captured_session_ids else None
+```
+
+The hook fires on every response the client sees, so `captured_session_ids` gains one entry per response carrying an `mcp-session-id` header (all the same value on one connection; if you reuse an `httpx2.AsyncClient` across reconnects, take the last entry). A hook can also be appended to an existing client: `client.event_hooks["response"].append(capture_session_id)`.
+
+`terminate_on_close` still defaults to `True`, so `streamable_http_client` sends its own `DELETE` for the session on exit; if your test deletes the session itself, pass `terminate_on_close=False`, or the transport's follow-up `DELETE` hits an already-terminated session and logs a `Session termination failed: 404` warning.
+
+### `StreamableHTTPTransport` parameters removed
+
+The `headers`, `timeout`, `sse_read_timeout`, and `auth` parameters have been removed from `StreamableHTTPTransport`. Configure these on the `httpx2.AsyncClient` instead (see example above).
+
+`sse_client` is unchanged apart from the `httpx2` retyping: it still takes `url`, `headers`, `timeout`, `sse_read_timeout`, `httpx_client_factory` (which must now return an `httpx2.AsyncClient`), `auth` (now `httpx2.Auth | None`), and `on_session_created`. Only the streamable HTTP transport dropped its transport-level parameters; `StreamableHTTPTransport(url)` now takes just the URL.
+
+### `StreamableHTTPTransport.protocol_version` attribute removed
+
+The transport no longer holds per-connection protocol state; era-dependent headers (e.g. `MCP-Protocol-Version`) are now supplied per-message by the session. If you were reading `transport.protocol_version` to learn the negotiated version, read `session.protocol_version` (or `client.protocol_version` on the high-level `Client`) instead.
+
+The `MCP_PROTOCOL_VERSION` header-name constant has moved: import `MCP_PROTOCOL_VERSION_HEADER` from `mcp.shared.inbound` instead of `MCP_PROTOCOL_VERSION` from `mcp.client.streamable_http`.
+
+### Streamable HTTP: non-2xx responses now surface as per-request JSON-RPC errors
+
+In v1, a non-2xx response to a message POST (other than 404) raised `httpx.HTTPStatusError` inside the transport's task group, so it escaped the `streamable_http_client` context as an `ExceptionGroup` and failed every pending request; a 404 raised `McpError` with the positive literal code `32600`. In v2 the transport no longer raises for HTTP status errors: the failing request gets a JSON-RPC error, raised as `MCPError` from that one call, and the connection stays usable. After a 500 fails one `tools/list`, the next call on the same session succeeds.
+
+| Server response | v1 | v2 |
+| --- | --- | --- |
+| Non-2xx with a JSON-RPC error body | body discarded; `httpx.HTTPStatusError` escapes the context | body's error surfaced verbatim, e.g. `MCPError(-32602, 'Invalid params')` |
+| 404, session established | `McpError` with positive code `32600` | `MCPError(-32600, 'Session terminated')` |
+| 404, no session yet | `McpError` with positive code `32600` | `MCPError(-32601, 'Not Found')` |
+| Any other 4xx/5xx | `httpx.HTTPStatusError` escapes as `ExceptionGroup` | `MCPError(-32603, 'Server returned an error response')` |
+
+Both common v1 patterns silently stop working: an `except* httpx.HTTPStatusError` around the transport context becomes dead code because status errors no longer escape the context, and a session-expiry check on `error.code == 32600` never matches again because the code is now the standard negative `-32600`.
+
+**Before (v1):**
+
+```python
+import httpx
+from mcp.shared.exceptions import McpError
+
+while True:
+    try:
+        async with streamable_http_client(url) as (read, write, _get_id):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                try:
+                    await session.list_tools()
+                except McpError as exc:
+                    if exc.error.code == 32600:  # v1's "Session terminated"
+                        continue  # session expired: rebuild the connection
+                    raise
+    except* httpx.HTTPStatusError:
+        pass  # server returned 4xx/5xx: the loop rebuilds the connection
+```
+
+**After (v2):**
+
+```python
+from mcp import ClientSession, MCPError
+from mcp.client.streamable_http import streamable_http_client
+from mcp.types import INVALID_REQUEST  # -32600
+
+async with streamable_http_client(url) as (read, write):
+    async with ClientSession(read, write) as session:
+        await session.initialize()
+        try:
+            await session.list_tools()
+        except MCPError as exc:
+            if exc.code == INVALID_REQUEST and exc.message == "Session terminated":
+                await reconnect()  # session expired: rebuild the connection
+            else:
+                raise
+```
+
+Move HTTP-status failure handling from around the transport context to around the individual calls, catching `MCPError` (see [`McpError` renamed to `MCPError`](#mcperror-renamed-to-mcperror)). Connect-level failures such as `httpx2.ConnectError` still escape the transport context as before; keep context-level handling for those only.
+
+### `terminate_windows_process` removed
+
+The deprecated `mcp.os.win32.utilities.terminate_windows_process` function has been
+removed. Process termination is handled internally by the `stdio_client` context
+manager; there is no replacement API. The Windows tree-termination helper
+`terminate_windows_process_tree` no longer accepts a `timeout_seconds` argument —
+the value was never used (Job Object termination is immediate).
+
+### `stdio_client` shutdown reworked: a gracefully-exited server's children are left alive on POSIX
+
+When a server exits on its own after `stdio_client` closes its stdin, background
+child processes the server leaves behind are deliberately left alive on POSIX:
+their lifetime is the server's business. The old shutdown wait was gated on the
+stdio pipes closing rather than on process exit, so a child holding an inherited
+pipe made a well-behaved server look hung: shutdown stalled for the full grace
+period, then attempted a tree-kill that in practice failed against the
+already-exited server (its process group could no longer be looked up) and logged
+a warning, leaving the children alive anyway. (That gating is an asyncio behavior
+specific to Python 3.11+; on Python 3.10 and the trio backend the old wait already
+resolved on process exit, so the spurious stall never happened there.) A server that does not exit within the grace
+period is still terminated
+along with its entire process group. On Windows, children stay in the server's Job
+Object and are still killed at shutdown — now deterministically when the job handle
+is closed, rather than whenever the handle happened to be garbage-collected.
+
+If you relied on `stdio_client` killing everything the server spawned, make the
+server terminate its own children on shutdown (its stdin reaching EOF is the
+shutdown signal), or clean up the process tree from the host application after
+`stdio_client` exits.
+
+Two related shutdown refinements: `stdio_client` now closes its end of the pipes
+deterministically at shutdown, so a surviving child that keeps writing to an
+inherited stdout receives `EPIPE`/`SIGPIPE` once the client is gone (previously the
+pipe lingered until garbage collection); and a failed write to a server that is
+still running now surfaces as a closed connection (`CONNECTION_CLOSED`) on the read
+side instead of a raw `BrokenResourceError` escaping the `stdio_client` context.
+
+`terminate_posix_process_tree` now requires the process to lead its own process
+group (spawned with `start_new_session=True`); the `getpgid()` lookup and the
+per-process terminate/kill fallback are gone. The win32 utilities logger is now
+named `mcp.os.win32.utilities` (was `client.stdio.win32`).
+
+### `stdio_server` keeps the protocol streams on private descriptors
+
+While serving, the stdio transport moves the wire to private descriptors and points
+fd 0 at the null device and fd 1 at stderr, restoring both on exit. Subprocesses and
+handler code can no longer read protocol bytes or write into the stream (the
+[#671](https://github.com/modelcontextprotocol/python-sdk/issues/671) fix). Ordinary
+servers have nothing to do, and code that inspects or manipulates fd 0/1 directly
+during a session now sees the diversions, not the wire.
+
+One pattern needs migrating: watchdog threads that watch fd 0 to detect a vanished
+client (a POSIX-specific pattern; `select.poll` does not exist on Windows). The null
+device does not behave like the old pipe: it never reports `POLLHUP` or `POLLERR`,
+and it reports readable immediately and permanently (`POLLIN` from `poll()` on Linux,
+plus `POLLOUT` under the default event mask; ready from `select()`; and macOS can
+report `POLLNVAL` for devices). A watcher waiting for `POLLHUP` or `POLLERR` is
+silently disarmed; a watcher that treats any event as "client gone" now fires at
+startup instead of never. Watch the parent process instead: on POSIX, exit
+when `os.getppid()` changes, which happens when the client dies because orphaned
+processes are reparented. That works on both v1 and v2 and does not depend on
+descriptor layout.
+
+Also new: a second concurrent `stdio_server()` on the process's default streams now
+raises `RuntimeError` instead of silently contending for stdin, a configuration that
+never worked (there is one stdin).
+
+Also worth knowing: a child process that streams large output to its inherited
+stdout now streams it into the client's stderr channel. Capture output you do not
+want in the client's logs, and be aware that a client which never drains its stderr
+pipe applies back-pressure to the server (true of stderr logging on v1 as well).
+
+### WebSocket transport removed
+
+The WebSocket transport has been removed: `mcp.client.websocket.websocket_client`, `mcp.server.websocket.websocket_server`, and the `ws` optional dependency extra (`mcp[ws]`) no longer exist. WebSocket was never part of the MCP specification. Use the streamable HTTP transport instead (`mcp.client.streamable_http.streamable_http_client` on the client, `streamable_http_app()` on the server), which supports bidirectional communication with server-to-client streaming over standard HTTP.
+
+## OAuth and server auth
+
+### Unchanged auth surfaces
+
+Most of the auth API carries over from v1; if a survey of your `mcp.client.auth` /
+`mcp.server.auth` usage only turns up the changes documented in the sections below, that is
+expected. In particular:
+
+- **OAuth client core.** `OAuthClientProvider` keeps its v1 constructor apart from the
+  [removed `timeout`](#timeout-parameter-removed-from-oauthclientprovider) and the
+  [`AuthorizationCodeResult`-returning `callback_handler`](#oauth-callback_handler-returns-authorizationcoderesult),
+  and gains an optional `validate_resource_url` callback for overriding the RFC 8707 resource
+  check: `OAuthClientProvider(server_url, client_metadata, storage, redirect_handler=None,
+  callback_handler=None, client_metadata_url=None, validate_resource_url=None)`. `PKCEParameters`,
+  `TokenStorage`, and the exceptions exported by `mcp.client.auth` (`OAuthFlowError`,
+  `OAuthTokenError`, `OAuthRegistrationError`) are unchanged; import `OAuthTokenError` from
+  `mcp.client.auth`, since `mcp.client.auth.extensions.client_credentials` no longer happens to
+  re-export it. `provider.context` (`OAuthContext`: `current_tokens`, `token_expiry_time`,
+  `is_token_valid()`, `can_refresh_token()`, `clear_tokens()`) also carries over, but remains an
+  internal object with no stability guarantee.
+- **Client-credentials extension.** `ClientCredentialsOAuthProvider`,
+  `PrivateKeyJWTOAuthProvider`, `SignedJWTParameters`, and `static_assertion_provider` in
+  `mcp.client.auth.extensions.client_credentials` keep their v1 signatures apart from the
+  [`scopes=` → `scope=` rename](#scopes-renamed-to-scope-on-the-client-credentials-providers)
+  and the [`RFC7523OAuthClientProvider`/`JWTParameters` removal](#rfc7523oauthclientprovider-and-jwtparameters-removed).
+  Their base class is now `httpx2.Auth` (see
+  [`httpx` and `httpx-sse` replaced by `httpx2`](#httpx-and-httpx-sse-replaced-by-httpx2)),
+  and `token_endpoint_auth_method="client_secret_post"` changes the token request body (see
+  [`client_secret_post` token requests now include `client_id`](#client_secret_post-token-requests-now-include-client_id)).
+- **Discovery and registration helpers.** `mcp.client.auth.utils` keeps its v1 helpers
+  (`build_protected_resource_metadata_discovery_urls`,
+  `build_oauth_authorization_server_metadata_discovery_urls`, the `handle_*_response`
+  coroutines, `extract_field_from_www_auth`/`extract_scope_from_www_auth`,
+  `get_client_metadata_scopes`), retyped from `httpx` to `httpx2` request/response objects.
+  The additions — `union_scopes`, `validate_metadata_issuer`,
+  `validate_authorization_response_iss`, `credentials_match_issuer`, and an optional
+  `client_grant_types` on `get_client_metadata_scopes` — are new, not renames.
+- **Resource-server surface.** `TokenVerifier`, `AccessToken`, and
+  `OAuthAuthorizationServerProvider` (`mcp.server.auth.provider`), `AuthSettings`,
+  `create_auth_routes`/`create_protected_resource_routes`,
+  `BearerAuthBackend`/`RequireAuthMiddleware`, `AuthContextMiddleware`/`get_access_token`,
+  `mcp.shared.auth`, `mcp.shared.auth_utils`, and `MCPServer`'s
+  `auth=`/`auth_server_provider=`/`token_verifier=` keywords all carry over. `AccessToken` has
+  had optional `subject` and `claims` fields since v1.27.2, so a subclass that existed only to
+  add them can be dropped. The SDK-hosted authorization server changes only per
+  [Stricter client authentication at `/token` and `/revoke`](#stricter-client-authentication-at-token-and-revoke),
+  plus the additive [SEP-990](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/990)
+  identity-assertion pieces (`AuthSettings(identity_assertion_enabled=True)` /
+  `create_auth_routes(..., identity_assertion_enabled=True)` and the overridable
+  `OAuthAuthorizationServerProvider.exchange_identity_assertion`, which rejects the grant by
+  default). The `mcp.shared.auth` metadata models keep their fields, with the additions covered
+  in the sections below.
+
+### `RFC7523OAuthClientProvider` and `JWTParameters` removed
+
+`RFC7523OAuthClientProvider` (deprecated since 1.23.0) and its `JWTParameters` model have been
+removed from `mcp.client.auth.extensions.client_credentials`. The provider implemented the
+[RFC 7523](https://datatracker.ietf.org/doc/html/rfc7523) §2.1 `jwt-bearer` *authorization grant*
+with an SDK-minted or prebuilt JWT, which no MCP auth extension specifies. Replace it with the
+purpose-built provider for the flow you actually run:
+
+- Machine-to-machine with a client secret
+  ([`io.modelcontextprotocol/oauth-client-credentials`](https://modelcontextprotocol.io/extensions/auth/oauth-client-credentials)):
+  `ClientCredentialsOAuthProvider(server_url=..., storage=..., client_id=..., client_secret=...)`.
+- Machine-to-machine authenticating with a JWT instead of a secret (same extension, RFC 7523 §2.2
+  `private_key_jwt` client authentication on the `client_credentials` grant, which is the mode the
+  extension actually specifies for JWTs): `PrivateKeyJWTOAuthProvider(server_url=...,
+  storage=..., client_id=..., assertion_provider=...)`. Build the assertion with
+  `SignedJWTParameters(issuer=..., subject=..., signing_key=...).create_assertion_provider()`
+  (replaces `JWTParameters` signing fields), or wrap a prebuilt JWT with
+  `static_assertion_provider(token)` (replaces `JWTParameters(assertion=...)`).
+- Presenting an enterprise ID-JAG under the `jwt-bearer` grant
+  ([SEP-990](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/990)):
+  `IdentityAssertionOAuthProvider` in `mcp.client.auth.extensions.identity_assertion`.
+
+The provider's third mode — the interactive `authorization_code` flow with `private_key_jwt`
+client authentication on the token exchange — has no replacement and is intentionally dropped; it
+was never exercised by the test suite and no MCP auth extension specifies it. If you depended on
+it, open an issue describing the deployment.
+
+### OAuth metadata URLs no longer gain a trailing slash
+
+`OAuthMetadata`, `ProtectedResourceMetadata`, and `OAuthClientMetadata` now set
+`url_preserve_empty_path=True` (Pydantic 2.12+). A path-less URL parsed from the wire keeps its
+empty path instead of acquiring a trailing slash, so e.g. an `issuer` of `https://as.example.com`
+round-trips as `https://as.example.com` rather than `https://as.example.com/`. This matters for
+[RFC 9207](https://datatracker.ietf.org/doc/html/rfc9207) / [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414) issuer comparisons, which require simple string comparison ([RFC 3986](https://datatracker.ietf.org/doc/html/rfc3986) §6.2.1).
+URLs constructed in Python from an already-built `AnyHttpUrl` object are unaffected (they were
+normalized at construction); only values parsed from strings/JSON change.
+
+This also changes the wire form of `OAuthClientMetadata.redirect_uris`: a path-less redirect URI
+passed as a string (e.g. `redirect_uris=['http://localhost:8080']`) now serializes as
+`http://localhost:8080` instead of `http://localhost:8080/`, and the client sends it verbatim in
+the `/authorize` and token-exchange requests. [RFC 6749](https://datatracker.ietf.org/doc/html/rfc6749) §3.1.2.3 requires authorization servers to
+match redirect URIs by exact string comparison, so if you registered such a URI with a previous SDK
+release (with the trailing slash) and the registration is persisted in `TokenStorage`, re-register
+the client so the stored value matches what the SDK now transmits.
+
+`AuthSettings` now sets `url_preserve_empty_path=True` for the same reason: a path-less
+`issuer_url` (or `resource_server_url`) passed as a string keeps its empty path, so the authorization
+server advertises `issuer` as `https://as.example.com` rather than `https://as.example.com/` in its
+metadata. Previously the trailing slash was added before the model saw the value, leaving the served
+issuer inconsistent with what clients compare against under RFC 8414 / RFC 9207. Passing an
+already-built `AnyHttpUrl` object still normalizes at construction; pass a string to get the
+preserved form.
+
+### OAuth `callback_handler` returns `AuthorizationCodeResult`
+
+The `callback_handler` passed to `OAuthClientProvider` now returns an `AuthorizationCodeResult` instead of a `tuple[str, str | None]` of `(code, state)`. The new object adds an `iss` field so the client can validate the [RFC 9207](https://datatracker.ietf.org/doc/html/rfc9207) authorization-response issuer ([SEP-2468](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2468)): when the redirect carries an `iss` query parameter it must match the authorization server's issuer, and a missing `iss` is rejected when the server advertised `authorization_response_iss_parameter_supported`.
+
+**Before (v1):**
+
+```python
+async def callback_handler() -> tuple[str, str | None]:
+    params = parse_qs(urlparse(await wait_for_redirect()).query)
+    return params["code"][0], params.get("state", [None])[0]
+```
+
+**After (v2):**
+
+```python
+from mcp.client.auth import AuthorizationCodeResult
+
+
+async def callback_handler() -> AuthorizationCodeResult:
+    params = parse_qs(urlparse(await wait_for_redirect()).query)
+    return AuthorizationCodeResult(
+        code=params["code"][0],
+        state=params.get("state", [None])[0],
+        iss=params.get("iss", [None])[0],
+    )
+```
+
+Forward the `iss` query parameter from the redirect so the validation can run: omitting it makes the flow fail with `OAuthFlowError` against servers that advertise `authorization_response_iss_parameter_supported`, and silently skips the check for servers that send `iss` without advertising it.
+
+### `scopes=` renamed to `scope=` on the client-credentials providers
+
+`ClientCredentialsOAuthProvider` and `PrivateKeyJWTOAuthProvider` took the requested scope as a keyword named `scopes`, even though the value is a single space-separated string, not a list. The parameter is now `scope`, matching the RFC 6749 wire parameter, `OAuthClientMetadata.scope`, and the newer `IdentityAssertionOAuthProvider`.
+
+**Before (v1):**
+
+```python
+ClientCredentialsOAuthProvider(..., scopes="read write")
+```
+
+**After (v2):**
+
+```python
+ClientCredentialsOAuthProvider(..., scope="read write")
+```
+
+### `client_secret_post` token requests now include `client_id`
+
+With `token_endpoint_auth_method="client_secret_post"`, the token request body now carries both `client_id` and `client_secret`, as [RFC 6749](https://datatracker.ietf.org/doc/html/rfc6749) §2.3.1 requires; v1 sent only `client_secret`. The authorization-code and refresh requests already carried `client_id`, so the observable difference is the `client_credentials` exchange sent by `ClientCredentialsOAuthProvider(..., token_endpoint_auth_method="client_secret_post")` (plus `resource`/`scope` when configured):
+
+```text
+# v1
+grant_type=client_credentials&client_secret=SECRET
+# v2
+grant_type=client_credentials&client_id=CLIENT_ID&client_secret=SECRET
+```
+
+Authorization servers that require both parameters answered the v1 request with `401 invalid_client`, so under v1 this provider effectively only worked with the default `client_secret_basic`. Drop any manual `client_id` injection or a test that pinned the 401 — the exchange now succeeds as configured.
+
+### `timeout` parameter removed from `OAuthClientProvider`
+
+`OAuthClientProvider` no longer accepts a `timeout` argument, and `OAuthContext.timeout` is gone. The value was stored but never read, so it never bounded anything — removing it changes nothing at runtime.
+
+**Before (v1):**
+
+```python
+provider = OAuthClientProvider(server_url, client_metadata, storage, timeout=120.0)
+```
+
+**After (v2):**
+
+```python
+provider = OAuthClientProvider(server_url, client_metadata, storage)
+```
+
+If you passed `timeout` to bound how long you wait for the user to complete authorization, apply that bound where you actually wait — inside your `redirect_handler`/`callback_handler`, e.g. `with anyio.fail_after(120): ...`. The full v2 constructor (v1's parameters minus `timeout`, plus a new optional `validate_resource_url` callback) is listed under [Unchanged auth surfaces](#unchanged-auth-surfaces).
+
+### Client rejects authorization server metadata with a mismatched `issuer`
+
+During OAuth discovery, `OAuthClientProvider` now validates that the authorization server
+metadata's `issuer` exactly matches the authorization server URL advertised in the protected
+resource metadata, as required by [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414)
+section 3.3 ([SEP-2468](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2468)).
+The comparison is a simple string comparison ([RFC 3986](https://datatracker.ietf.org/doc/html/rfc3986)
+section 6.2.1), so even a trailing-slash disagreement counts as a mismatch. (For an older server
+that publishes no protected resource metadata the expected value is the MCP server's own origin,
+and there a root issuer with a trailing slash is accepted too.) v1 accepted the
+metadata without checking, so a server pairing whose two values disagree authenticated fine
+under v1 and now fails the entire flow. For example, when the MCP server's protected resource
+metadata advertises
+
+```json
+{"authorization_servers": ["https://as.example.com"]}
+```
+
+while the authorization server's RFC 8414 metadata says `"issuer": "https://as.example.com/"`,
+v1 completes discovery and proceeds with the flow; v2 aborts with:
+
+```text
+OAuthFlowError: Authorization server metadata issuer mismatch: https://as.example.com/ != https://as.example.com
+```
+
+There is no client-side override. Fix the deployment instead: make the authorization server's
+`issuer` string-equal the URL in the protected resource metadata's `authorization_servers`
+list (or the MCP server's origin, without protected resource metadata). See [OAuth metadata URLs no longer gain a trailing slash](#oauth-metadata-urls-no-longer-gain-a-trailing-slash)
+for how v2 preserves the exact string form of these URLs.
+
+### OAuth client requests `offline_access` and adds `prompt=consent` when the authorization server supports it ([SEP-2207](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2207))
+
+The OAuth client now augments its requested scope with `offline_access` whenever the
+authorization server's metadata advertises that scope in `scopes_supported` and the client's
+`grant_types` include `refresh_token`, which is the default. When `offline_access` ends up in
+the requested scope, the authorization request also carries `prompt=consent`, as OIDC requires
+for offline access. Against an authorization server that advertises `offline_access` (Keycloak
+and Auth0 do by default), an unchanged v1 client sends a different authorization URL:
+
+**Before (v1):**
+
+```text
+https://as.example.com/authorize?...&scope=read
+```
+
+**After (v2):**
+
+```text
+https://as.example.com/authorize?...&scope=read offline_access&prompt=consent
+```
+
+Three observable consequences: end users see an interactive consent screen on every
+authorization where OIDC providers previously re-authorized returning users silently, the
+granted scope is broader with refresh tokens issued and persisted through `TokenStorage` where
+v1 never requested them, and strict authorization servers that reject un-allowlisted scopes may
+fail the flow with `invalid_scope`. The `prompt=consent` half applies even when
+`offline_access` was already part of the scope selection in v1.
+
+To keep the v1 behavior (no `offline_access` request, no consent prompt, no refresh tokens),
+restrict the client's grant types:
+
+```python
+client_metadata = OAuthClientMetadata(
+    client_name="my-client",
+    redirect_uris=["http://localhost:3000/callback"],
+    grant_types=["authorization_code"],
+)
+```
+
+Note this also registers the client without the `refresh_token` grant, so token refresh is
+disabled; there is no knob for refresh tokens without the forced consent screen, since
+`prompt=consent` is keyed off the final scope.
+
+### OAuth client credentials are bound to their authorization server ([SEP-2352](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2352))
+
+Persisted OAuth client credentials are now bound to the authorization server that issued them: `OAuthClientInformationFull` records an `issuer`, set by the SDK after registration. When a server's protected resource metadata later points at a different authorization server, the client discards the bound credentials (and the old tokens) and re-registers with the new server instead of presenting one server's `client_id` to another. URL-based client IDs (CIMD) are portable and unaffected; credentials with no recorded issuer (pre-registered, or stored before this change) are left as-is. No API change for existing `TokenStorage` implementations - the `issuer` round-trips through the unchanged `get_client_info`/`set_client_info`.
+
+### Step-up authorization unions previously requested scopes ([SEP-2350](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2350))
+
+When a `403 insufficient_scope` challenge triggers step-up re-authorization, the OAuth client now requests the union of the previously requested scopes and the newly challenged scopes, instead of replacing the scope with only the challenged ones. This keeps permissions granted for earlier operations from being dropped when a later operation escalates. No API change; the wider scope is sent automatically on the re-authorization request.
+
+### OAuth Dynamic Client Registration sends `application_type` ([SEP-837](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/837))
+
+`OAuthClientMetadata` now carries an `application_type` field that is sent during Dynamic Client Registration. It defaults to `"native"`, which suits MCP clients that use loopback redirect URIs (CLI and desktop apps); browser-based clients served from a non-local host should set it to `"web"`:
+
+```python
+from mcp.shared.auth import OAuthClientMetadata
+
+client_metadata = OAuthClientMetadata(
+    redirect_uris=["https://app.example.com/callback"],
+    application_type="web",
+)
+```
+
+Under OIDC, omitting `application_type` defaults to `"web"`, which an authorization server may reject for the `localhost` redirect URIs native clients use; sending `"native"` avoids that. Non-OIDC servers ignore the parameter.
+
+### `OAuthClientInformationFull` no longer subclasses `OAuthClientMetadata`, and parses server-substituted metadata
+
+`OAuthClientMetadata` is the registration request a client sends; `OAuthClientInformationFull` is the authorization server's record of a registered client, parsed from its Dynamic Client Registration response. In v1 the second inherited from the first, which typed the response as though it had to be a request this SDK would send. It does not: [RFC 7591 §3.2.1](https://datatracker.ietf.org/doc/html/rfc7591#section-3.2.1) lets the server "reject or replace any of the client's requested metadata values submitted during the registration and substitute them with suitable values", and real servers return an `application_type` outside OIDC Registration's `web`/`native`, an explicit `null`, a `token_endpoint_auth_method` the SDK does not implement, or an empty `redirect_uris`. The inherited strict types turned each of those into a `ValidationError` on a 2xx response - after the server had already provisioned the client, so the registration was discarded and orphaned.
+
+The two are now siblings over a shared `OAuthClientMetadataBase`. `OAuthClientMetadata` keeps its strict types (the SDK still refuses to *send* an unregistered `application_type`), while `OAuthClientInformationFull` accepts what a server may echo:
+
+```python
+# v1
+class OAuthClientInformationFull(OAuthClientMetadata): ...
+
+# v2
+class OAuthClientMetadata(OAuthClientMetadataBase): ...          # request: strict
+class OAuthClientInformationFull(OAuthClientMetadataBase): ...   # server record: tolerant
+```
+
+On `OAuthClientInformationFull`, `application_type` and `token_endpoint_auth_method` are now `str | None`, `grant_types` is `list[str]`, and `redirect_uris` is optional (`list[AnyUrl] | None`, no minimum length). `client_id` is now required (`str`): [RFC 7591 §3.2.1](https://datatracker.ietf.org/doc/html/rfc7591#section-3.2.1) makes it mandatory in the response, and a record of a registered client without one was never meaningful. Code that only reads these fields is unaffected. Code that relied on `isinstance(client_info, OAuthClientMetadata)`, or passed an `OAuthClientInformationFull` where an `OAuthClientMetadata` is expected, must reference the record type directly. `validate_scope()` and `validate_redirect_uri()` moved with the record: they are methods of `OAuthClientInformationFull` (the type authorization-server code holds) and are no longer available on `OAuthClientMetadata`.
+
+A registration response the server sends is no longer rejected on these fields: a member serialized as a placeholder - an explicit `null`, or `""` - reads as an omitted key, so its default applies. Whether a substituted value is usable is judged where it matters, not at parse. When Dynamic Client Registration completes with credentials the authorization-code flow cannot use - a `token_endpoint_auth_method` other than `none`, `client_secret_post`, or `client_secret_basic` (including `private_key_jwt`, whose assertion that flow has no key to sign), or a secret-based method for which the server issued no `client_secret` - the client raises `OAuthRegistrationError` naming the problem, before the record is stored or authorization begins. Separately, a stored or pre-registered record carrying a method the SDK does not know at all raises `OAuthTokenError` when it reaches the token exchange; `private_key_jwt` on such a record does not raise there, so `PrivateKeyJWTOAuthProvider`, which signs its assertion only in the client-credentials exchange, still recovers from a rejected refresh by exchanging afresh.
+
+The SDK's own registration endpoint now returns all registered metadata in its 201 response (RFC 7591 §3.2.1) - including the client's `application_type`, which v1 dropped from the echo (silently reporting the default in place of a client's `"web"`), and `client_secret_expires_at` (`0` when the secret never expires) whenever a `client_secret` is issued. It also now answers a `private_key_jwt` registration with `400 invalid_client_metadata` rather than confirming a method it authenticates no requests with.
+
+### Stricter client authentication at `/token` and `/revoke`
+
+v2 hardens client authentication on SDK-hosted authorization servers (`create_auth_routes`) in two ways. Both apply automatically; server code only needs changing if you hand-provision client records.
+
+**Client-auth failures now return `invalid_client`.** In v1, every `ClientAuthenticator` failure at `/token` (unknown `client_id`, wrong secret, expired secret) returned HTTP 401 with `unauthorized_client`. v2 returns `invalid_client`, the code [RFC 6749](https://datatracker.ietf.org/doc/html/rfc6749) §5.2 assigns to failed client authentication:
+
+```text
+# v1
+401 {"error":"unauthorized_client","error_description":"Invalid client_id"}
+# v2
+401 {"error":"invalid_client","error_description":"Invalid client_id"}
+```
+
+`unauthorized_client` is now reserved for a client that authenticated successfully but is not permitted the requested grant. Update any client code, integration tests, or alerting that string-matches the old error code, or accept both while clients and servers migrate at different times.
+
+**Secret-based clients without a stored secret are rejected.** In v1, `ClientAuthenticator` only validated a secret when one was stored, so a hand-provisioned client record with a secret-based auth method but no secret authenticated with no credentials at all. v2 rejects such clients before any grant processing: `/token` returns 401 `invalid_client` and `/revoke` returns 401 `unauthorized_client`, both with the description "Client is registered for secret-based authentication but has no stored secret". Only records that explicitly set `client_secret_post` or `client_secret_basic` with no secret are affected: records left at the default `token_endpoint_auth_method=None` fail in both versions, and DCR-registered clients always receive a generated secret.
+
+**Before (v1):**
+
+```python
+from mcp.shared.auth import OAuthClientInformationFull
+
+LEGACY_CLIENT = OAuthClientInformationFull(
+    client_id="legacy-client",
+    client_secret=None,  # no secret stored
+    token_endpoint_auth_method="client_secret_post",  # but a secret-based method
+    redirect_uris=["http://localhost:1234/cb"],
+)
+```
+
+**After (v2):** either register the client as public, or store a secret that clients must then present:
+
+```python
+LEGACY_CLIENT = OAuthClientInformationFull(
+    client_id="legacy-client",
+    token_endpoint_auth_method="none",  # public client, no secret expected
+    redirect_uris=["http://localhost:1234/cb"],
+)
+```
+
+## Stricter protocol validation and wire behavior
+
+### Server handler results are validated against the protocol schema
+
+Results returned from server handlers are now validated against the negotiated protocol version's schema before being sent. A result that does not conform raises on the server side and the client receives an `INTERNAL_ERROR` response. The case most existing code will hit is `Tool.inputSchema`: the spec requires it to contain `"type": "object"`, so an empty `{}` is now rejected.
+
+Validation runs when the result is serialized onto the wire, not when the model is constructed: `Tool(name="t", input_schema={})` still constructs, so a fixture that builds such a tool only fails once a `tools/list` handler returns it. Your handler returns normally; the server then logs the `pydantic.ValidationError` (`handler for 'tools/list' returned an invalid result`) and answers the request with `INTERNAL_ERROR`, so the failure shows up on the client, not at the line that built the model.
+
+### Client validates inbound traffic against the protocol schema
+
+`ClientSession` now validates server requests, notifications, and results against the negotiated protocol version's schema before parsing them into `mcp.types` models. Spec-invalid server output that the previous monolith parse tolerated may now raise `pydantic.ValidationError` from `list_tools()`, `call_tool()`, and similar calls. `_meta` remains the sanctioned place for result extras (and `experimental` for capability extras).
+
+### Unknown request methods now return `-32601` (Method not found)
+
+In v1, a request for a method the SDK didn't recognize failed request-union validation and was answered with `-32602` (`"Invalid request parameters"`, empty `data`). Any method the receiver doesn't serve — unrecognized on either side, or a spec method the server has no registered handler for — is now answered with the JSON-RPC-specified `-32601` (`"Method not found"`), with the method name in `data`, in every initialization state. Clients still decline sampling, elicitation, and roots requests with `-32600` when no callback is registered, as in v1. Update anything that matched on the old code for this case.
+
+### Every outbound request now carries a `_meta` envelope; OpenTelemetry is on by default
+
+v2 sends `"_meta": {}` in the params of every request it emits, at every negotiated protocol version. Requests that had no params in v1, such as `ping` and `tools/list`, now carry `"params": {"_meta": {}}`; server-initiated requests get the same envelope. This is spec-valid and accepted by all peers, but wire traffic differs from v1 on every call, and no configuration restores the v1 wire shape. Update any test or tooling that asserts on raw outbound request bytes.
+
+**Before (v1):** same client code, 2025-11-25 peer:
+
+```text
+{"method":"ping","jsonrpc":"2.0","id":1}
+{"method":"tools/list","jsonrpc":"2.0","id":2}
+```
+
+**After (v2):**
+
+```text
+{"jsonrpc":"2.0","id":2,"method":"ping","params":{"_meta":{}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{"_meta":{}}}
+```
+
+The envelope exists for OpenTelemetry trace propagation ([SEP-414](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/414)), which now ships enabled: every server installs a tracing middleware and the client opens a span per outbound request. With no OpenTelemetry SDK configured these are no-ops and only the empty envelope is visible. If your application already configures a global tracer provider, it starts recording MCP client and server spans with no code change, and a W3C `traceparent` field is injected into outbound `_meta`, propagating your trace ids to the servers you call. To suppress the spans, filter the `mcp-python-sdk` tracer in your pipeline; [OpenTelemetry](https://py.sdk.modelcontextprotocol.io/run/opentelemetry/index.md) has the recipe for removing the server middleware. There is no public switch for the client-side span and `traceparent` injection.
+
+The SDK's new `opentelemetry-api` runtime dependency is covered under [Packaging, dependencies, and CLI](#packaging-dependencies-and-cli).
+
+## Testing utilities
+
+### `create_connected_server_and_client_session` removed
+
+The `create_connected_server_and_client_session` helper in `mcp.shared.memory` has been removed. Use `mcp.client.Client` instead — it accepts a `Server` or `MCPServer` instance directly and handles the in-memory transport and session setup for you.
+
+**Before (v1):**
+
+```python
+from mcp.shared.memory import create_connected_server_and_client_session
+
+async with create_connected_server_and_client_session(server) as session:
+    result = await session.call_tool("my_tool", {"x": 1})
+```
+
+**After (v2):**
+
+```python
+from mcp.client import Client
+
+async with Client(server) as client:
+    result = await client.call_tool("my_tool", {"x": 1})
+```
+
+`Client` accepts the same callback parameters the old helper did (`sampling_callback`, `list_roots_callback`, `logging_callback`, `message_handler`, `elicitation_callback`, `client_info`), keeps `raise_exceptions` for surfacing server-side errors and `read_timeout_seconds` (now a plain `float` of seconds rather than a `timedelta`; see [Timeouts take `float` seconds instead of `timedelta`](#timeouts-take-float-seconds-instead-of-timedelta)), and adds `mode` to control version negotiation (`'auto'` by default; `'legacy'` reproduces v1's initialize-only handshake). Its method signatures are not identical to `ClientSession`'s: the `list_*()` methods paginate with a plain `cursor=` keyword rather than `params=PaginatedRequestParams(...)` (see [`cursor` parameter removed from `ClientSession` list methods](#cursor-parameter-removed-from-clientsession-list-methods)).
+
+One consequence to plan for: unlike the old helper, `Client(server)` negotiates 2026-07-28 by default, where server-initiated requests are refused. A v1 test that drove `ctx.elicit()`, `ctx.session.create_message()`, or `list_roots()` through the helper now fails with `NoBackChannelError` even with the callbacks set. Pin the era — `Client(server, mode="legacy", sampling_callback=..., elicitation_callback=..., list_roots_callback=...)` — or port the handler to a resolver dependency; see [Server-initiated sampling, elicitation, and roots raise `NoBackChannelError`](#server-initiated-sampling-elicitation-and-roots-raise-nobackchannelerror).
+
+If you need direct access to the underlying `ClientSession` and memory streams (e.g., for low-level transport testing), `create_client_server_memory_streams` is still available in `mcp.shared.memory`:
+
+```python
+import anyio
+from mcp.client.session import ClientSession
+from mcp.shared.memory import create_client_server_memory_streams
+
+async with create_client_server_memory_streams() as (client_streams, server_streams):
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(lambda: server.run(*server_streams, server.create_initialization_options()))
+        async with ClientSession(*client_streams) as session:
+            await session.initialize()
+            ...
+        tg.cancel_scope.cancel()
+```
+
+Note that the streams it yields are now context-propagating wrappers (`ContextReceiveStream`/`ContextSendStream`) rather than plain anyio memory streams. They support `send`, `receive`, async iteration, `close`, `aclose`, and `clone`, but the anyio-only methods `send_nowait`, `receive_nowait`, and `statistics()` are gone and raise `AttributeError`; use `await send(...)`/`await receive()` instead, or create plain `anyio.create_memory_object_stream` pairs yourself if you need the full anyio API.
+
+One behavioral caveat when moving progress-reporting handlers onto `Client(server)`: reading `ctx.meta["progress_token"]` and calling `session.send_progress_notification(token, ...)` is specific to the JSON-RPC transport path. On the in-process modern path (`DirectDispatcher` / `Client(server)`), there is no wire token in `_meta`, so handlers that gate progress on the token's presence go silent.
+
+`ctx.report_progress(progress, total, message)` works on every dispatcher: it sends a progress notification when a token is present and routes the update through the dispatcher's progress channel otherwise, no-opping only when the caller did not request progress at all (see also [Client-to-server progress deprecated](#client-to-server-progress-deprecated-2026-07-28)). `session.send_progress_notification(progress_token, ...)` is unchanged and still works on JSON-RPC transports for code that already holds a token.
+
+## Deprecations
+
+Every deprecation below is a runtime warning as well as a type-checker one: deprecated methods and helpers emit `mcp.MCPDeprecationWarning` on each call, and the deprecated `Server(...)` constructor parameters (`on_set_logging_level`, `on_roots_list_changed`, `on_progress`) emit it at construction time. The category subclasses `UserWarning`, not `DeprecationWarning`, so it is visible by default; [Deprecated features](https://py.sdk.modelcontextprotocol.io/deprecated/index.md) has the full list and each replacement.
+
+Under pytest's `filterwarnings = ["error"]`, that warning becomes an exception at the first deprecated call. Inside an `@mcp.tool()` handler the exception is caught like any other and returned as `CallToolResult(is_error=True)` (`Error executing tool ...`, with the `MCPDeprecationWarning` traceback in the server log), which reads as a failing tool rather than a warning. Keep the warnings visible but non-fatal with:
+
+```toml
+[tool.pytest.ini_options]
+filterwarnings = [
+    "error",
+    "default::mcp.MCPDeprecationWarning",
+]
+```
+
+Use `"ignore::mcp.MCPDeprecationWarning"` (or the `warnings.filterwarnings` call [below](#roots-sampling-and-logging-methods-deprecated-sep-2577)) to silence them instead, and wrap a test that deliberately exercises a deprecated path in `pytest.warns(MCPDeprecationWarning)`.
+
+### Client resource-subscription methods deprecated (SEP-2575)
+
+[SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/2575) removes `resources/subscribe` and `resources/unsubscribe` from the 2026-07-28 wire; per-URI subscriptions travel in the `subscriptions/listen` filter instead. The client verbs now carry `typing_extensions.deprecated`:
+
+- `Client.subscribe_resource()` / `Client.unsubscribe_resource()`
+- `ClientSession.subscribe_resource()` / `ClientSession.unsubscribe_resource()`
+
+Calling them emits `mcp.MCPDeprecationWarning`. They keep working against 2025-era servers — where they are still the only way to watch a resource, so code that talks to 2025-11-25 (or earlier) servers should keep calling them and filter the warning rather than migrate. A 2026-07-28 server answers them with `-32601` (method not found); on those connections migrate to the listen driver, `Client.listen()`:
+
+```python
+async with client.listen(resource_subscriptions=["board://sprint"]) as sub:
+    async for event in sub:  # ResourceUpdated(uri="board://sprint")
+        ...
+```
+
+On a bare `ClientSession` (no high-level `Client`), the same stream is `listen(session, resource_subscriptions=[...])` from `mcp.client.subscriptions` — the function `Client.listen()` wraps — which requires a 2026-07-28 connection and raises `ListenNotSupportedError` on an older one. See the [Subscriptions](https://py.sdk.modelcontextprotocol.io/client/subscriptions/index.md#watching-the-stream) page under Clients for the full client-side contract (typed events, the honored filter, clean end vs `SubscriptionLost`).
+
+### Roots, Sampling, and Logging methods deprecated (SEP-2577)
+
+[SEP-2577](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2577) deprecates the Roots, Sampling, and Logging features as of the 2026-07-28 spec. The deprecation is advisory only: there are no wire-level changes, capability negotiation is unchanged, and every method keeps working for sessions negotiating 2025-11-25 and earlier.
+
+The deprecation and the back-channel are separate axes. Sampling, roots, and push elicitation are server-initiated *requests*, so on a connection negotiated at 2026-07-28 — including the default in-process `Client(server)` — `create_message()`, `list_roots()`, and `elicit()` / `elicit_form()` raise `NoBackChannelError` rather than working with a warning; the resolver markers `Sample`, `ListRoots`, and `Elicit` are the era-portable form (see [Server-initiated sampling, elicitation, and roots raise `NoBackChannelError`](#server-initiated-sampling-elicitation-and-roots-raise-nobackchannelerror)).
+
+The user-facing methods for these features now carry `typing_extensions.deprecated`, so type checkers, IDEs, and the runtime surface a deprecation warning where they are called:
+
+- Sampling: `ServerSession.create_message()`, `ClientPeer.sample()`
+- Roots: `ServerSession.list_roots()`, `ClientPeer.list_roots()`, `ClientSession.send_roots_list_changed()`, `Client.send_roots_list_changed()`
+- Logging: `ServerSession.send_log_message()`, `Connection.log()`, `ClientSession.set_logging_level()`, `Client.set_logging_level()`, `mcp.server.context.Context.log()` (the lowlevel `Context`), and the `MCPServer` `Context` helpers `log()`, `debug()`, `info()`, `warning()`, `error()`
+
+Registering a handler for a deprecated capability is deprecated too. The `Server.__init__` parameters `on_set_logging_level` (Logging) and `on_roots_list_changed` (Roots) are now split out into a `typing_extensions.deprecated` overload, so passing either is flagged by type checkers and emits `mcp.MCPDeprecationWarning` at construction time. `on_progress` follows the same pattern (see below). The non-deprecated overload omits these parameters, so the common case stays warning-free.
+
+To silence the warnings in code, filter the category:
+
+```python
+import warnings
+from mcp import MCPDeprecationWarning
+
+warnings.filterwarnings("ignore", category=MCPDeprecationWarning)
+```
+
+No migration is required during the deprecation window. New code should avoid building on these features, since they may be removed in a future spec version.
+
+### Client-to-server progress deprecated (2026-07-28)
+
+The 2026-07-28 spec restricts `notifications/progress` to the server-to-client direction only — `ProgressNotification` is no longer in the spec's `ClientNotification`. `Client.send_progress_notification()` and `ClientSession.send_progress_notification()` now carry `typing_extensions.deprecated` and emit `mcp.MCPDeprecationWarning` at runtime. They continue to work against servers negotiating 2025-11-25 or earlier. Registering a lowlevel `Server` `on_progress` handler is deprecated the same way as the SEP-2577 handler parameters above: it sits in the `typing_extensions.deprecated` `Server.__init__` overload and passing it emits `mcp.MCPDeprecationWarning` at construction time.
+
+On the server side, prefer the new dispatcher-agnostic `ServerSession.report_progress(progress, total, message)` (and `Context.report_progress()` on `MCPServer`) over the raw `ServerSession.send_progress_notification(progress_token, …)`. `report_progress` encapsulates the "no-op when the caller did not request progress" rule and works on every dispatcher; the raw token-taking form remains for handlers that read `_meta.progressToken` directly.
+
+## Notes for 2026-era connections
+
+Everything below this heading describes behavior that only activates on connections
+negotiated at protocol 2026-07-28 or later. Migrated v1 code talking to 2025-11-25 (or
+earlier) peers is unaffected — the notable exception being an in-process `Client(server)`,
+which negotiates 2026-07-28 by default (first subsection below). It is collected here so the
+rest of this guide stays focused on the v1-to-v2 upgrade itself.
+
+### Server-initiated sampling, elicitation, and roots raise `NoBackChannelError`
+
+The 2026-07-28 protocol has no server-initiated requests, so a handler that reaches back to the client mid-request — `ctx.elicit()`, `ctx.elicit_url()`, `ctx.session.create_message()`, `ctx.session.list_roots()`, or any other `ServerSession` request helper — raises `NoBackChannelError` on such a connection instead of sending. An in-process `Client(server)` negotiates 2026-07-28 by default (see [`Client` defaults to `mode='auto'`](#client-defaults-to-modeauto)), so the first smoke test of an unchanged v1 sampling or elicitation tool fails, and setting `sampling_callback=` / `elicitation_callback=` on the client changes nothing because no request ever reaches the client.
+
+`NoBackChannelError` lives in `mcp.shared.exceptions` and subclasses `MCPError` (code `-32600`, message `Cannot send '<method>': this transport context has no back-channel for server-initiated requests.`). Raised inside an `@mcp.tool()` it reaches the client as a top-level JSON-RPC error, not `CallToolResult(is_error=True)` — see [`MCPError` raised from an `@mcp.tool()` handler now surfaces as a JSON-RPC error](#mcperror-raised-from-an-mcptool-handler-now-surfaces-as-a-json-rpc-error) — and the [Troubleshooting](https://py.sdk.modelcontextprotocol.io/troubleshooting/index.md) page walks through the client-side traceback. The same exception is raised on a legacy session against a `stateless_http=True` server, and on the request-scoped channel of a stateful legacy session against a `json_response=True` server (a JSON body carries exactly one response, so a mid-request `ctx.elicit()` cannot ride it; the session's standalone `GET` stream still carries unrelated messages) — both places v1 dropped the message and stalled ([`Server.run()` no longer takes a `stateless` flag](#serverrun-no-longer-takes-a-stateless-flag)). Notifications never raise it: `send_log_message()`, `send_tool_list_changed()`, and the other notification helpers are dropped with a debug log where no channel exists (and the change-notification helpers are dropped on every 2026-era connection, channel or not — see [change notifications travel only on `subscriptions/listen` streams](#change-notifications-travel-only-on-subscriptionslisten-streams)), and `UrlElicitationRequiredError` from a tool is unaffected (it is an error response, not a request).
+
+Two ways to migrate:
+
+- **Keep the push behavior for now** by connecting at a pre-2026 version: `Client(server, mode="legacy", sampling_callback=..., elicitation_callback=...)` reproduces v1's `initialize` handshake, in-process included; a lowlevel `ClientSession` you `initialize()` yourself already negotiates a 2025-era version, so hand-rolled test harnesses are unaffected. Sampling and roots stay deprecated on this path ([SEP-2577](#roots-sampling-and-logging-methods-deprecated-sep-2577)).
+- **Port to the era-portable form**: return the question instead of pushing it — a `Resolve(...)`-backed parameter whose resolver returns `Elicit`, `Sample`, or `ListRoots` (all in `mcp.server.mcpserver`). The SDK elicits directly on a legacy connection and drives the `InputRequiredResult` multi-round trip at 2026-07-28, with one tool body for both eras; see [Dependencies](https://py.sdk.modelcontextprotocol.io/handlers/dependencies/index.md), [Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md), and [Serving legacy clients](https://py.sdk.modelcontextprotocol.io/run/legacy-clients/index.md).
+
+**Before (v1):**
+
+```python
+@mcp.tool()
+async def book_table(date: str, ctx: Context) -> str:
+    result = await ctx.elicit(f"Book a table for {date}?", schema=Confirmation)
+    if result.action == "accept" and result.data.confirm:
+        return f"Booked for {date}."
+    return "No booking made."
+```
+
+**After (v2), era-portable:**
+
+```python
+from typing import Annotated
+
+from mcp.server.mcpserver import Elicit, Resolve
+
+
+async def ask_to_confirm(date: str) -> Elicit[Confirmation]:
+    return Elicit(f"Book a table for {date}?", Confirmation)
+
+
+@mcp.tool()
+async def book_table(date: str, answer: Annotated[Confirmation, Resolve(ask_to_confirm)]) -> str:
+    if answer.confirm:
+        return f"Booked for {date}."
+    return "No booking made."
+```
+
+The client's same `elicitation_callback` answers both; the resolver lets the server *return* the question instead of pushing it.
+
+### Log messages are delivered only to requests that opt in
+
+At 2026-07-28 the deprecated logging capability changes shape: `logging/setLevel` is gone, and log delivery becomes a per-request opt-in. A server MUST NOT send `notifications/message` for a request whose `_meta` lacks `io.modelcontextprotocol/logLevel`, and when the key is present it sends only entries at or above that level, on that request's own stream. So on a 2026-era connection the request-scoped log calls — `ctx.info(...)` and friends on `MCPServer`'s `Context`, `ctx.session.send_log_message(...)`, `Context.log(...)` — are silently dropped (debug-logged) unless the request opted in, and dropped when they fall below the requested level; `Connection.log(...)`, which has no request to opt in, never sends there. Nothing changes on 2025-11-25 and earlier connections.
+
+The most visible consequence is the in-process `Client(server)`, which negotiates 2026-07-28 by default: a `logging_callback` that used to receive every message now receives nothing until the client opts in. `Client` grows a `log_level` argument for exactly this, stamped as the reserved `_meta` key on every modern request:
+
+```python
+async with Client(server, logging_callback=on_log, log_level="info") as client:
+    await client.call_tool("chatty", {})  # info and above reach `on_log`
+```
+
+`log_level=None` (the default) means no opt-in — a `logging_callback` alone is not one — and a single request can override the client-wide default by supplying the key in its own `meta=` (e.g. `meta={LOG_LEVEL_META_KEY: "debug"}` from `mcp_types`). The opt-in is what the spec calls for on 2026-era servers generally, not just this SDK's. Because 2026 log delivery is request-scoped by construction, `related_request_id` on `send_log_message` no longer selects the standalone stream there: whatever is delivered rides the requesting stream.
+
+### Change notifications travel only on `subscriptions/listen` streams
+
+On a 2026-07-28 connection, `notifications/tools/list_changed`, `notifications/prompts/list_changed`, `notifications/resources/list_changed`, and `notifications/resources/updated` reach a client only through a `subscriptions/listen` stream it opened — the spec forbids sending a notification type a subscription did not request. The v1-style session helpers (`ctx.session.send_tool_list_changed()`, `send_prompt_list_changed()`, `send_resource_list_changed()`, `send_resource_updated(uri)`) push a bare copy onto the connection's standalone channel instead, so on such a connection they are dropped with a debug log: silently on streamable HTTP (there is no standalone channel), and on stdio, where earlier v2 releases wrote the bare notification to the shared pipe, it is now dropped too. On pre-2026 connections the helpers behave as in v1.
+
+Migrate to publishing on the subscription bus, which stamps and filters per stream: `await ctx.notify_tools_changed()`, `notify_prompts_changed()`, `notify_resources_changed()`, and `notify_resource_updated(uri)` on `MCPServer`'s `Context`, or `await bus.publish(...)` on a low-level `Server`'s own `SubscriptionBus` — see [Subscriptions](https://py.sdk.modelcontextprotocol.io/handlers/subscriptions/index.md). A stream only ever receives the kinds and URIs the server acknowledged for it; to gate per caller which subscriptions may be opened, refuse `subscriptions/listen` in a middleware (`MCPServer(middleware=[...])`), covered on the same page.
+
+### Servers validate `Mcp-Param-*` headers against the request body ([SEP-2243](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2243))
+
+On the 2026-07-28 Streamable HTTP path, a `tools/call` whose tool declares `x-mcp-header` annotations is validated before dispatch — each annotated argument and its mirroring `Mcp-Param-*` header must be present together and agree (after base64-sentinel decoding; integers compare numerically), or absent together. A violation is rejected with HTTP 400 and JSON-RPC error `-32020` (`HeaderMismatch`), as the spec requires. A client that sends an annotated argument *without* its header — for example one that never listed the tool — is therefore rejected instead of silently served; the spec's recovery is to re-list and retry. On the client side, `ClientSession.call_tool` emits these headers automatically for annotated arguments of any tool it has listed; list the tool first, and note that pre-2026 connections and non-HTTP transports never emit them.
+
+There is nothing to configure. The server resolves the called tool's schema through its own registered `tools/list` handler (for `MCPServer`, the built-in one), so the validated catalog is exactly what that caller would be shown. Two consequences worth knowing: the listing runs internally on validated calls, so middleware and an expensive or paginated `tools/list` handler see extra invocations; and validation is skipped — never failing the call — when no `tools/list` handler is registered, the tool isn't in the listing, the handler raises (logged as an error), or the call has no arguments and no `Mcp-Param-*` headers. Headers with no matching annotation are ignored; a recognized header supplied more than once is rejected, as is a duplicated `MCP-Protocol-Version`, `Mcp-Method`, or `Mcp-Name` line. The codec and validator are public in `mcp.shared.inbound` (`decode_header_value`, `validate_mcp_param_headers`) for low-level servers hosting their own HTTP entry.
+
+Base64-sentinel decoding is strict everywhere it applies, including the `Mcp-Name` header: a `=?base64?...?=` value whose payload is not canonical base64 (wrong padding, stray characters, non-zero trailing bits) or not valid UTF-8 is rejected as malformed rather than leniently decoded.
+
+## Need Help?
+
+If you encounter issues during migration:
+
+1. Check the [API Reference](https://py.sdk.modelcontextprotocol.io/api/mcp/) for updated method signatures
+2. Review the [examples](https://github.com/modelcontextprotocol/python-sdk/tree/main/examples) for updated usage patterns
+3. Open an issue on [GitHub](https://github.com/modelcontextprotocol/python-sdk/issues) if you find a bug or need further assistance
+
+# Get started
+
+Source: https://py.sdk.modelcontextprotocol.io/get-started/
+
+New to MCP, or new to this SDK? Start here. These pages take you from nothing to a
+working, tested server: [install the SDK](https://py.sdk.modelcontextprotocol.io/get-started/installation/index.md), build your
+[first server](https://py.sdk.modelcontextprotocol.io/get-started/first-steps/index.md), [connect it to a real host](https://py.sdk.modelcontextprotocol.io/get-started/real-host/index.md), and
+[test it](https://py.sdk.modelcontextprotocol.io/get-started/testing/index.md) with an in-memory client.
+
+## Run the code
+
+All the code blocks can be copied and used directly: they are complete, working files.
+
+To follow along, paste a block into a `server.py` and open it in the MCP Inspector:
+
+```console
+uv run mcp dev server.py
+```
+
+It is **HIGHLY encouraged** that you write (or copy) the code, edit it, and run it locally. Using it in your own editor is what really shows you the point: how little you write, the autocompletion, the type checks catching mistakes before you run anything.
+
+## You will not be guessing
+
+Every example in these docs is a complete file under [`docs_src/`](https://github.com/modelcontextprotocol/python-sdk/tree/main/docs_src) in the SDK's own repository, and every one of them is exercised by the SDK's test suite through an **in-memory client**:
+
+```python
+import pytest
+from mcp import Client
+
+from server import mcp
+
+
+@pytest.mark.anyio
+async def test_add() -> None:
+    async with Client(mcp) as client:
+        result = await client.call_tool("add", {"a": 1, "b": 2})
+        assert result.structured_content == {"result": 3}
+```
+
+No subprocess, no port, no transport. `Client(mcp)` connects to the server object directly.
+
+If a change to the SDK breaks an example on one of these pages, CI goes red before the page does. The code you read here is the code that runs.
+
+You'll use this yourself in [Testing](https://py.sdk.modelcontextprotocol.io/get-started/testing/index.md); it's how you test your own servers, too.
+
+## Where to go next
+
+Once you have a server running, the rest of these docs are a reference, not a course.
+Every page stands on its own, so jump straight to what you need:
+
+* What a server exposes (tools, resources, prompts) is **[Servers](https://py.sdk.modelcontextprotocol.io/servers/index.md)**.
+* What's available inside the functions you register is **[Inside your handler](https://py.sdk.modelcontextprotocol.io/handlers/index.md)**.
+* Getting it in front of clients (stdio, HTTP, your existing FastAPI app) is **[Running your server](https://py.sdk.modelcontextprotocol.io/run/index.md)**.
+* Building the other side, an application that *uses* MCP servers, is **[Clients](https://py.sdk.modelcontextprotocol.io/client/index.md)**.
+
+# Installation
+
+Source: https://py.sdk.modelcontextprotocol.io/get-started/installation/
+
+The Python SDK is on PyPI as [`mcp`](https://pypi.org/project/mcp/). It requires **Python 3.10+**.
+
+These docs describe **v2**, the current stable release line:
+
+=== "uv"
+
+    ```bash
+    uv add "mcp[cli]"
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install "mcp[cli]"
+    ```
+
+!!! note "Coming from v1?"
+    v2 is a major version with breaking changes; the **[Migration Guide](https://py.sdk.modelcontextprotocol.io/migration/index.md)**
+    covers every one. If your *package* depends on `mcp` and isn't ready to migrate, keep a
+    `<2` upper bound (for example `mcp>=1.28,<2`) so an unpinned resolve stays on the 1.x line.
+
+## What gets installed
+
+You don't need to know any of this to use the SDK, but if you're wondering what each dependency is for:
+
+* `mcp-types`: every protocol type (requests, results, content blocks) as its own package, versioned in lockstep with the SDK. Code that depends on `mcp` imports it through the `mcp.types` alias (every `from mcp.types import ...` in these docs); import `mcp_types` directly only in a project that installs `mcp-types` without the SDK.
+* [`anyio`](https://anyio.readthedocs.io/): the async runtime. The whole SDK is written against anyio, so it runs on either `asyncio` or `trio`.
+* [`pydantic`](https://docs.pydantic.dev/): what every `mcp.types` model is built on, plus all schema generation and validation.
+* [`httpx2`](https://pypi.org/project/httpx2/): the HTTP client behind the Streamable HTTP and SSE *client* transports, with server-sent events support built in.
+* [`starlette`](https://www.starlette.io/), [`uvicorn`](https://www.uvicorn.org/), [`sse-starlette`](https://pypi.org/project/sse-starlette/), and [`python-multipart`](https://pypi.org/project/python-multipart/): the HTTP *server* transports.
+* [`jsonschema`](https://pypi.org/project/jsonschema/): validates a tool's structured output against its declared output schema.
+* [`pyjwt[crypto]`](https://pyjwt.readthedocs.io/): OAuth token handling for authorization.
+* [`opentelemetry-api`](https://opentelemetry-python.readthedocs.io/): just the lightweight API, so the SDK's tracing middleware costs nothing unless you install an OpenTelemetry SDK and exporter yourself.
+* [`typing-extensions`](https://typing-extensions.readthedocs.io/) and [`typing-inspection`](https://pypi.org/project/typing-inspection/): modern typing features on Python 3.10.
+* [`pywin32`](https://pypi.org/project/pywin32/): Windows only, used for `stdio` subprocess management.
+
+## Optional extras
+
+* `mcp[cli]` adds [`typer`](https://typer.tiangolo.com/) and [`python-dotenv`](https://pypi.org/project/python-dotenv/) for the `mcp` command-line tool (`mcp dev`, `mcp run`, `mcp install`). You'll want this during development; you may not need it in a deployed server.
+* `mcp[rich]` adds [`rich`](https://rich.readthedocs.io/) for nicer server logs.
+
+# First steps
+
+Source: https://py.sdk.modelcontextprotocol.io/get-started/first-steps/
+
+The **[landing page](https://py.sdk.modelcontextprotocol.io/index.md)** moves fast: write a server, run it, call a tool.
+
+This page takes it slowly, with all three things a server can expose, and a name for everything along the way.
+
+## Host, client, and server
+
+Three words you'll see on every page from here on:
+
+* A **host** is the LLM application: Claude, an IDE, an agent runtime. It's the thing the user is talking to.
+* A **client** lives inside the host and speaks MCP. The host runs one client per server it's connected to.
+* A **server** is what you build with this SDK. It exposes things to clients. It never talks to the model directly.
+
+You write the server. Hosts are someone else's product. The SDK also gives you a `Client`, the same class a host would use to reach a server by URL or launch it as a subprocess. It shows up later on this page, and it is also how you'll test your servers.
+
+## The three primitives
+
+A server exposes exactly three kinds of thing. What separates them is **who decides to use them**:
+
+| Primitive     | Controlled by   | What it is                                          | Example                            |
+|---------------|-----------------|-----------------------------------------------------|------------------------------------|
+| **Tools**     | The model       | A function the model calls to take an action        | An API call, a database write      |
+| **Resources** | The application | Data the host loads into the model's context        | A file's contents, an API response |
+| **Prompts**   | The user        | A reusable message template the user invokes by name | A slash command, a menu entry      |
+
+"Controlled by" is the whole point of the split. A tool runs because the **model** decided to call it. A resource is attached because the **application** decided the model needed it. A prompt runs because the **user** picked it.
+
+!!! info
+    If you've built a web API you already have most of the intuition: a **resource** is a `GET`
+    (it loads data and changes nothing) and a **tool** is a `POST` (it does work and may have
+    side effects). A **prompt** has no HTTP analogue; it's closer to a saved query the user runs
+    by name.
+
+## One server, all three
+
+```python title="server.py" hl_lines="6 12 18"
+# docs_src/first_steps/tutorial001.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Demo")
+
+
+@mcp.tool()
+def add(a: int, b: int) -> int:
+    """Add two numbers."""
+    return a + b
+
+
+@mcp.resource("greeting://{name}")
+def greeting(name: str) -> str:
+    """Greet someone by name."""
+    return f"Hello, {name}!"
+
+
+@mcp.prompt()
+def summarize(text: str) -> str:
+    """Summarize a piece of text in one sentence."""
+    return f"Summarize the following text in one sentence:\n\n{text}"
+```
+
+Three plain functions, three decorators. Each decorator is the entire registration:
+
+* `@mcp.tool()` makes `add` a **tool**.
+* `@mcp.resource("greeting://{name}")` makes `greeting` a **resource template**: the `{name}` in the URI is the function's parameter.
+* `@mcp.prompt()` makes `summarize` a **prompt**. The string it returns becomes a user message.
+
+Everything else (the name, the description, the argument schema) the SDK reads from the function itself: its name, its docstring, its type hints. You never declared any of it separately.
+
+!!! tip
+    The two halves of the SDK have two import paths: `from mcp import Client` and
+    `from mcp.server import MCPServer`. There is no `from mcp import MCPServer`.
+
+### Try it
+
+Run it with the MCP Inspector:
+
+```console
+uv run mcp dev server.py
+```
+
+Open the URL it prints. The Inspector has one tab per primitive; walk through them in order.
+
+**Tools.** One entry: `add`, described as *Add two numbers.* The form has a required integer field for `a` and another for `b`. Fill them in, call it, and the result is `3`. The Inspector built that form from `a: int, b: int`. So does every other client.
+
+**Resources.** The *Resources* list is empty. `greeting` is under **Resource Templates**, because `greeting://{name}` has a parameter: there is no single resource to list until someone supplies a `name`. Give it `World` and read it:
+
+```text
+Hello, World!
+```
+
+**Prompts.** One entry: `summarize`, with a single required `text` argument. Get it with some text and you receive one message with `role: user` and your rendered string as the content. That's all a prompt is: a function that builds messages.
+
+The Inspector ran your server over **stdio**, one of the transports an MCP server can speak. You don't pick one yet; **[Running your server](https://py.sdk.modelcontextprotocol.io/run/index.md)** is the page for that.
+
+## Capabilities
+
+You saw three tabs in the Inspector. How did it know there were three?
+
+When a client connects, the server declares its **capabilities**: which families of requests it will answer. The client uses that declaration to decide what to even ask for. You never wrote it; `MCPServer` declares it for you.
+
+Look at it yourself. Leave `server.py` running over HTTP in one terminal:
+
+```console
+uv run mcp run server.py --transport streamable-http
+```
+
+and point a client at it from another:
+
+```python title="client.py" hl_lines="7-8"
+# docs_src/first_steps/tutorial001_client.py
+import anyio
+
+from mcp import Client
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        print(client.server_capabilities.model_dump(exclude_none=True))
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+```console
+python client.py
+```
+
+```text
+{'prompts': {'list_changed': True}, 'resources': {'subscribe': True, 'list_changed': True}, 'tools': {'list_changed': True}}
+```
+
+That dictionary is your server's declared **capabilities**. It's the first thing every connecting client learns:
+
+| Capability  | The client may now call                                    |
+|-------------|------------------------------------------------------------|
+| `tools`     | `tools/list`, `tools/call`                                  |
+| `resources` | `resources/list`, `resources/templates/list`, `resources/read` |
+| `prompts`   | `prompts/list`, `prompts/get`                               |
+
+`MCPServer` serves all three primitives, so all three are always declared.
+
+Notice what isn't there. `completions` (argument autocomplete for resource templates and prompts) needs a handler you write, this server doesn't have one, so the capability is absent and a well-behaved client won't ask. That's the rule for everything optional: register the thing and the capability appears; **[Completions](https://py.sdk.modelcontextprotocol.io/servers/completions/index.md)** proves it.
+
+!!! info
+    That `client.py` is a complete MCP client, and **[The Client](https://py.sdk.modelcontextprotocol.io/client/index.md)** is its page.
+    In a test you skip the terminal and the port and hand `Client` the server object itself,
+    `Client(mcp)`. That gets a whole page too: **[Testing](https://py.sdk.modelcontextprotocol.io/get-started/testing/index.md)**.
+
+## What you did not write
+
+Look back over this page. You wrote three small Python functions. You did **not** write:
+
+* A JSON Schema. `a: int, b: int` *is* the schema for `add`.
+* A request handler. `tools/list`, `resources/read`, `prompts/get`: all served for you.
+* A capability declaration. `MCPServer` made it for you.
+* A line of protocol. The version negotiation, the JSON-RPC framing, the capability exchange: all of it happened inside `mcp dev` and `client.py`, and you never saw it.
+
+That ratio is the whole point of the SDK.
+
+## Recap
+
+* A **host** is the LLM app, a **client** is its MCP-speaking half, a **server** is what you build.
+* Tools are **model**-controlled, resources are **application**-controlled, prompts are **user**-controlled.
+* One decorator per primitive: `@mcp.tool()`, `@mcp.resource(uri)`, `@mcp.prompt()`. Name, description, and schema come from the function.
+* A URI with a `{param}` makes a resource **template**, listed separately from concrete resources.
+* The server's **capabilities** are declared for you, and a client only asks for what a server declares.
+* `Client("http://localhost:8000/mcp")` talks to your running server. Hand it the server object instead, `Client(mcp)`, and it is your test harness from day one.
+
+Next up is **[Connect to a real host](https://py.sdk.modelcontextprotocol.io/get-started/real-host/index.md)**: this server inside Claude Desktop or an IDE, for real. Then **[Testing](https://py.sdk.modelcontextprotocol.io/get-started/testing/index.md)**: one page, one in-memory client, and you're never guessing whether it works. After that, each primitive gets its own page, starting with the one the model drives: **[Tools](https://py.sdk.modelcontextprotocol.io/servers/tools/index.md)**.
+
+# Connect to a real host
+
+Source: https://py.sdk.modelcontextprotocol.io/get-started/real-host/
+
+A **host** is the application your server ends up inside: Claude Desktop, Claude Code, an IDE. The host is what the user talks to. Inside it, an MCP **client** launches your server as a child process and speaks to it over that process's stdin and stdout.
+
+Which means connecting to a host is one act: you tell it **the command that starts your server**. Everything on this page (two CLI commands, three JSON files) is a different place to put that same command.
+
+## One server, every host
+
+```python title="server.py" hl_lines="4 34-35"
+# docs_src/real_host/tutorial001.py
+from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+
+mcp = MCPServer("Bookshop")
+
+CATALOG = {
+    "Dune": "Frank Herbert",
+    "Neuromancer": "William Gibson",
+    "The Left Hand of Darkness": "Ursula K. Le Guin",
+}
+
+
+@mcp.tool()
+def search_books(query: str) -> list[str]:
+    """Search the catalog by title or author."""
+    needle = query.lower()
+    return [title for title, author in CATALOG.items() if needle in title.lower() or needle in author.lower()]
+
+
+@mcp.tool()
+def get_author(title: str) -> str:
+    """Look up the author of a book in the catalog."""
+    if title not in CATALOG:
+        raise ToolError(f"No book titled {title!r} in the catalog.")
+    return CATALOG[title]
+
+
+@mcp.resource("catalog://titles")
+def titles() -> str:
+    """Every title in the catalog, one per line."""
+    return "\n".join(sorted(CATALOG))
+
+
+if __name__ == "__main__":
+    mcp.run()
+```
+
+Two tools and a resource, one file. Three things about that file matter to every host below:
+
+* `mcp.run()` with no arguments starts a **stdio** server: it blocks, reads protocol messages on stdin, and writes them on stdout. That is the transport every host on this page speaks. The host starts your file as a child process and owns those two pipes, which is why connecting is only ever "here is the command". You never pick a port, and nothing listens on one.
+* `run()` is under `if __name__ == "__main__":`. Everything below **imports** this file rather than executing it, so an unguarded `run()` would start a server the moment anything loaded the module.
+* The server object is a module-level global named `mcp`. That's the name `mcp run` looks for (`server` and `app` also work). Call it something else and you name it explicitly: `mcp run server.py:bookshop`.
+
+That is the last line of Python on this page. From here down it is all host configuration.
+
+## The launch command
+
+Every host below gets the same command:
+
+```bash
+uv run --with "mcp[cli]" mcp run /absolute/path/to/server.py
+```
+
+One command for all of them because `uv run --with` resolves the SDK into a fresh environment on the spot: it works from any directory and needs no project and no virtual environment to activate. That matters here more than anywhere else, because a host launches your server from *its* working directory with a near-empty environment, not from your shell.
+
+It is also the command `mcp install` writes into Claude Desktop's config for you (below), so what you type by hand and what the tool generates agree, apart from the exact version pin the tool adds.
+
+!!! tip "If a host can't find `uv`"
+    A host spawns your server with a minimal `PATH`, and `uv` may not be on it. Replace the bare
+    `uv` with the absolute path from `which uv` (macOS/Linux) or `where uv` (Windows). That is
+    exactly what `mcp install` writes.
+
+!!! note "This page is the local story"
+    Everything here runs your server on the machine the host is on: the host launches your
+    file, over stdio. That is exactly right for a personal or single-machine tool. To give a
+    server to people who do *not* have your file, you hand out a **URL**, not a command: the
+    same `mcp` object served over Streamable HTTP. **[Running your server](https://py.sdk.modelcontextprotocol.io/run/index.md)**
+    is that decision in one table, and **[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)** is the road from
+    there to a real hostname.
+
+    And a host is nothing more than an application with an MCP client inside it, so your own
+    Python can play the host's part: **[Client transports](https://py.sdk.modelcontextprotocol.io/client/transports/index.md)** launches
+    this same file as a subprocess with `Client(StdioServerParameters(...))`, and **[Testing](https://py.sdk.modelcontextprotocol.io/get-started/testing/index.md)**
+    connects to it in memory with no process at all.
+
+## Claude Desktop
+
+The one host the SDK can configure for you:
+
+```bash
+uv run mcp install server.py
+```
+
+That's it. `mcp install` imports the file to read the server's name, finds Claude Desktop's config file, and writes the launch command into it. Along the way it converts your path to an absolute one, so you don't have to.
+
+There is nothing to be mystified by. This is the entry it writes:
+
+```json
+{
+  "mcpServers": {
+    "Bookshop": {
+      "command": "/absolute/path/to/uv",
+      "args": [
+        "run",
+        "--frozen",
+        "--with",
+        "mcp[cli]==2.0.0",
+        "mcp",
+        "run",
+        "/absolute/path/to/server.py"
+      ]
+    }
+  }
+}
+```
+
+That's the launch command from the section above with three additions: the absolute path to `uv`, `--frozen` so `uv` never rewrites a lockfile it happens to be near, and an exact pin to the `mcp` version you have installed. It lands in `claude_desktop_config.json`, which lives at:
+
+* **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+* **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+You can write that file by hand. `mcp install` exists so you don't make the classic mistake (a relative path) while doing it.
+
+Fully quit Claude Desktop (not just its window) and reopen it.
+
+!!! warning
+    `mcp install` fails with `Claude app not found` if Claude Desktop's config *directory* doesn't
+    exist yet. Install Claude Desktop and run it once: that's what creates the directory.
+
+!!! tip
+    Claude Desktop starts your server in its own process, so your shell's environment variables are
+    not there. `uv run mcp install server.py -v API_KEY=abc123` (or `-f .env`) records them in the
+    entry's `env` field. `--name` overrides the entry name; it defaults to the server's `name`.
+
+## Claude Code
+
+There is no file to edit. Register the server with the `claude` CLI; everything after `--` is the launch command.
+
+```bash
+claude mcp add bookshop -- uv run --with "mcp[cli]" mcp run /absolute/path/to/server.py
+```
+
+Run `/mcp` inside a Claude Code session to confirm `bookshop` is connected and its tools are listed.
+
+## Cursor
+
+Create `.cursor/mcp.json` in your project root.
+
+```json
+{
+  "mcpServers": {
+    "bookshop": {
+      "command": "uv",
+      "args": ["run", "--with", "mcp[cli]", "mcp", "run", "/absolute/path/to/server.py"]
+    }
+  }
+}
+```
+
+The same `command` plus `args`, under the same `mcpServers` key Claude Desktop uses. The server appears in Cursor's MCP settings with both tools listed.
+
+## VS Code
+
+Create `.vscode/mcp.json` in your project root.
+
+```json
+{
+  "servers": {
+    "bookshop": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--with", "mcp[cli]", "mcp", "run", "/absolute/path/to/server.py"]
+    }
+  }
+}
+```
+
+Two differences from Cursor's file, and they are the only two: the wrapper key is `servers`, not `mcpServers`, and each entry declares its `type`. Confirm the trust prompt, then **MCP: List Servers** in the Command Palette shows `bookshop` running.
+
+!!! note
+    You need VS Code 1.99 or later with the **GitHub Copilot** extension signed in (Copilot Free is
+    enough), and Copilot Chat must be in **Agent** mode, because no other mode calls tools.
+
+## It doesn't show up
+
+Before you touch any host config, run the launch command yourself:
+
+```bash
+uv run --with "mcp[cli]" mcp run /absolute/path/to/server.py
+```
+
+Nothing prints, and it doesn't return. That silence is correct: a stdio server is waiting for a host to speak first on stdin (`Ctrl-C` to stop it). A traceback or an immediate exit is the real bug, and now you can read it instead of guessing at it through a host.
+
+Once that command sits and waits, what's left is almost always one of three things:
+
+* **A relative path.** The host launches your server from *its* working directory, not the one you registered from. `server.py` where `/absolute/path/to/server.py` is needed is the single most common failure. If the host can't find `uv` either, that path has to be absolute too.
+* **The host is still running its old config.** Hosts read their config at launch. Claude Desktop in particular has to be *fully quit* (not just its window closed) and reopened before an edit to `claude_desktop_config.json` takes effect.
+* **Something reached stdout outside the diverted window.** On stdio, stdout *is* the protocol. The SDK diverts flushed stray output to stderr while serving, but output flushed to stdout before then (a wrapper script echoing, an import-time `print()` in an unbuffered process), or a buffered `print()` drained at interpreter exit, hands the host a corrupt message and it drops the connection. Log with the default `logging` configuration, whose stderr handler flushes each record; custom handlers must also avoid stdout. **[Logging](https://py.sdk.modelcontextprotocol.io/handlers/logging/index.md)** has the whole story.
+
+Claude Desktop keeps a log per server: `mcp-server-<NAME>.log` is your server's stderr, next to `mcp.log` for connections, under `~/Library/Logs/Claude` on macOS and `%APPDATA%\Claude\logs` on Windows.
+
+For anything past those three, **[Troubleshooting](https://py.sdk.modelcontextprotocol.io/troubleshooting/index.md)** is the page.
+
+## Recap
+
+* A **host** (Claude Desktop, an IDE) runs an MCP client that launches your server as a child process over stdio. Connecting means giving it one launch command.
+* That command is `uv run --with "mcp[cli]" mcp run /absolute/path/to/server.py`: no venv to activate, works from any directory.
+* **Claude Desktop** is the one host `mcp install` configures for you. It writes that same command (plus the absolute path to `uv`, `--frozen`, and an exact pin to the version you have installed) into `claude_desktop_config.json`, so you never have to.
+* **Claude Code** is `claude mcp add bookshop -- <launch command>`. **Cursor** is `.cursor/mcp.json` under `mcpServers`. **VS Code** is `.vscode/mcp.json` under `servers`, each entry with a `type`.
+* Absolute paths everywhere, restart the host after editing its config, and never let anything but the SDK write to stdout.
+
+Every host on this page connected to the same file, with the same command. What that file can *expose* is the rest of these docs: **[Tools](https://py.sdk.modelcontextprotocol.io/servers/tools/index.md)**, **[Resources](https://py.sdk.modelcontextprotocol.io/servers/resources/index.md)**, and every transport besides stdio in **[Running your server](https://py.sdk.modelcontextprotocol.io/run/index.md)**.
+
+# Testing
+
+Source: https://py.sdk.modelcontextprotocol.io/get-started/testing/
+
+The SDK's `Client` class, the same one that connects to a URL or launches a subprocess, also connects **in memory**: pass it your server object and it talks to it directly.
+
+No subprocess. No port. Nothing on a wire. It's the same idea as FastAPI's `TestClient`.
+
+## Basic usage
+
+Let's assume you have a simple server with a single tool:
+
+```python title="server.py"
+# docs_src/testing/tutorial001.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Calculator")
+
+
+@mcp.tool()
+def add(a: int, b: int) -> int:
+    """Add two numbers."""
+    return a + b
+```
+
+To run the test below you'll need two extra (development) dependencies:
+
+=== "uv"
+
+    ```bash
+    uv add --dev pytest inline-snapshot
+    ```
+
+=== "pip"
+
+    ```bash
+    pip install pytest inline-snapshot
+    ```
+
+!!! info
+    These docs assume you already know [`pytest`](https://docs.pytest.org/en/stable/).
+
+    [`inline-snapshot`](https://15r10nk.github.io/inline-snapshot/latest/) is what the test below
+    uses to assert on the whole result object in one line. It records the output of a test as the
+    `snapshot(...)` literal you see. If you'd rather not use it, drop the import and assert on the
+    fields you care about (`result.content[0].text == "3"`) like in any other test.
+
+Now the test:
+
+```python title="test_server.py"
+import pytest
+from inline_snapshot import snapshot
+from mcp import Client
+from mcp.types import CallToolResult, TextContent
+
+from server import mcp
+
+
+@pytest.fixture
+def anyio_backend():  # (1)!
+    return "asyncio"
+
+
+@pytest.fixture
+async def client():  # (2)!
+    async with Client(mcp, raise_exceptions=True) as c:
+        yield c
+
+
+@pytest.mark.anyio
+async def test_call_add_tool(client: Client):
+    result = await client.call_tool("add", {"a": 1, "b": 2})
+    # Drop the server identity stamp in `_meta`; it is not what this test is about.
+    result.meta = None
+    assert result == snapshot(
+        CallToolResult(
+            content=[TextContent(type="text", text="3")],
+            structured_content={"result": 3},
+        )
+    )
+```
+
+1. If you are using `trio`, return `"trio"` instead. See the [anyio documentation](https://anyio.readthedocs.io/en/stable/testing.html#specifying-the-backends-to-run-on) for the details.
+2. The fixture yields a connected client. Every test that takes `client` gets a fresh in-memory connection to the same server.
+
+There you go! You can now extend your tests to cover more scenarios.
+
+## Why `raise_exceptions=True`?
+
+Two different things can go wrong, and this flag only touches one of them.
+
+An exception inside one of **your tools** is not a protocol failure. It becomes a normal result with
+`is_error=True` (and if it was a `ToolError`, the model reads your message). `raise_exceptions` doesn't
+change that: with or without it, `call_tool` returns the same `is_error=True` result. There's a whole page on it:
+**[Handling errors](https://py.sdk.modelcontextprotocol.io/servers/handling-errors/index.md)**.
+
+A failure **outside** a tool body is different. On the connection `Client(mcp)` gives you, the
+server sanitises it into a generic `"Internal server error"` before the client sees it. You should
+never leak the details of an unexpected crash to a remote caller. In a test that is exactly what
+you *don't* want, and it is what `raise_exceptions=True` changes: your test sees the real message
+instead of the sanitised one.
+
+Leave it on in tests. It has no meaning in production code.
+
+## Era-neutral by default
+
+!!! note
+    `Client(mcp)` connects in-process and is **era-neutral** by default: it probes the server and
+    picks the appropriate protocol path. Pin `mode="legacy"` if your test exercises legacy-specific
+    semantics (sampling or elicitation push, `message_handler`), and drop `raise_exceptions=True`
+    there: a legacy connection never sanitises in the first place, and the flag re-raises the
+    failure inside the server task instead of in your test.
+
+That one line is also why these docs can promise you that their examples work: every
+example file is exercised by the SDK's own test suite, almost all of them through exactly this
+client. You're using the same tool the SDK uses on itself.
+
+You have a working, tested server. Putting it inside a real application (Claude Desktop, an
+IDE) is **[Connect to a real host](https://py.sdk.modelcontextprotocol.io/get-started/real-host/index.md)**; every other way to serve it is
+**[Running your server](https://py.sdk.modelcontextprotocol.io/run/index.md)**.
+
+# Servers
+
+Source: https://py.sdk.modelcontextprotocol.io/servers/
+
+An `MCPServer` exposes three primitives to a connected client. They differ by who
+decides to use them:
+
+* A **[tool](https://py.sdk.modelcontextprotocol.io/servers/tools/index.md)** is an action the *model* picks and calls. This is
+  the page most people want first, and
+  **[Structured Output](https://py.sdk.modelcontextprotocol.io/servers/structured-output/index.md)** is its reference companion:
+  everything about the shape of what a tool returns.
+* A **[resource](https://py.sdk.modelcontextprotocol.io/servers/resources/index.md)** is read-only data the *application*
+  chooses to read. **[URI templates](https://py.sdk.modelcontextprotocol.io/servers/uri-templates/index.md)** is its reference
+  companion: the full addressing syntax and the path-safety rules.
+* A **[prompt](https://py.sdk.modelcontextprotocol.io/servers/prompts/index.md)** is a message template a *person* invokes by
+  name, from a menu or a slash command.
+
+Around the three primitives, the rest of what a server declares:
+
+* **[Completions](https://py.sdk.modelcontextprotocol.io/servers/completions/index.md)** is server-side autocomplete for prompt
+  and resource-template arguments.
+* **[Images, audio & icons](https://py.sdk.modelcontextprotocol.io/servers/media/index.md)** covers everything a tool can
+  return besides text, and the icons a client shows next to your server.
+* **[Handling errors](https://py.sdk.modelcontextprotocol.io/servers/handling-errors/index.md)** explains the difference between an
+  error the model can recover from and one it must never see.
+
+Every page here stands on its own; jump straight to the one you need. If you haven't
+built a server yet, start with **[First steps](https://py.sdk.modelcontextprotocol.io/get-started/first-steps/index.md)** instead.
+
+What happens *inside* the functions you register (the `Context`, dependency injection,
+asking the user for more input mid-call) is the next section,
+**[Inside your handler](https://py.sdk.modelcontextprotocol.io/handlers/index.md)**.
+
+# Tools
+
+Source: https://py.sdk.modelcontextprotocol.io/servers/tools/
+
+A **tool** is a function the model can call.
+
+You declare one by putting `@mcp.tool()` on a plain Python function. That's the whole API.
+
+## Your first tool
+
+```python title="server.py" hl_lines="6-8"
+# docs_src/tools/tutorial001.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.tool()
+def search_books(query: str, limit: int) -> str:
+    """Search the catalog by title or author."""
+    return f"Found 3 books matching {query!r} (showing up to {limit})."
+```
+
+Look at what you wrote. There are no schemas, no JSON, no protocol, just a function. The SDK reads three things from it:
+
+* The **name** of the tool is the name of the function: `search_books`.
+* The **description** the model sees is the docstring: `Search the catalog by title or author.`
+* The **arguments** the model is allowed to pass come from the type hints: `query: str` and `limit: int`.
+
+### The input schema
+
+From those type hints the SDK generates a JSON Schema and sends it to the client during `tools/list`:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {"title": "Query", "type": "string"},
+    "limit": {"title": "Limit", "type": "integer"}
+  },
+  "required": ["query", "limit"],
+  "title": "search_booksArguments"
+}
+```
+
+Both arguments are in `required` because neither has a default. You'll fix that in a moment. (The `title` keys are Pydantic artifacts; the properties, their types, and `required` are the contract.)
+
+There is no `$schema` key either: MCP treats a schema without one as **JSON Schema 2020-12**, which is what Pydantic generates, so there is nothing to choose until you write schemas by hand on the **[low-level Server](https://py.sdk.modelcontextprotocol.io/advanced/low-level-server/index.md#the-dialect-is-json-schema-2020-12)**.
+
+!!! tip
+    Type hints aren't documentation here. They are **the contract**. If a client sends `"limit": "ten"`,
+    the SDK rejects it before your function ever runs.
+
+### What the model gets back
+
+Call the tool with `{"query": "dune", "limit": 5}` and the result has two parts:
+
+```python
+result.content             # [TextContent(text="Found 3 books matching 'dune' (showing up to 5).")]
+result.structured_content  # {'result': "Found 3 books matching 'dune' (showing up to 5)."}
+```
+
+`content` is the text the **model** reads. `structured_content` is typed data for the **client application**. It's there because you declared the return type as `-> str`.
+
+Don't worry about `structured_content` yet. Return real Python objects from your tools and the right thing happens; the **[Structured Output](https://py.sdk.modelcontextprotocol.io/servers/structured-output/index.md)** page is all about it.
+
+### Try it
+
+Run the server with the MCP Inspector:
+
+```console
+uv run mcp dev server.py
+```
+
+Open the URL it prints, go to the **Tools** tab, and call `search_books`.
+
+The Inspector renders a form with a required `query` text field and a required `limit` number field. It built that form from your type hints. So will every other MCP client.
+
+## Optional arguments
+
+Give a parameter a default value and it stops being required. That's it. It's just Python.
+
+```python title="server.py" hl_lines="7"
+# docs_src/tools/tutorial002.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.tool()
+def search_books(query: str, limit: int = 10) -> str:
+    """Search the catalog by title or author."""
+    return f"Found 3 books matching {query!r} (showing up to {limit})."
+```
+
+The schema follows:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {"title": "Query", "type": "string"},
+    "limit": {"default": 10, "title": "Limit", "type": "integer"}
+  },
+  "required": ["query"],
+  "title": "search_booksArguments"
+}
+```
+
+`limit` left `required` and gained `"default": 10`. A client that omits it gets `10`, exactly as Python would.
+
+## Richer schemas with `Field`
+
+Type hints get you a long way, but sometimes you want to *describe* an argument, or constrain it.
+
+Wrap the type in `Annotated` and add a Pydantic `Field`:
+
+```python title="server.py" hl_lines="12-14"
+# docs_src/tools/tutorial003.py
+from typing import Annotated, Literal
+
+from pydantic import Field
+
+from mcp.server import MCPServer
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.tool()
+def search_books(
+    query: Annotated[str, Field(description="Title or author to search for.")],
+    limit: Annotated[int, Field(ge=1, le=50, description="Maximum number of results.")] = 10,
+    genre: Literal["fiction", "non-fiction", "poetry"] | None = None,
+) -> str:
+    """Search the catalog by title or author."""
+    where = f" in {genre}" if genre else ""
+    return f"Found 3 books matching {query!r}{where} (showing up to {limit})."
+```
+
+Three new things, all on the parameters:
+
+* `Field(description=...)`: a per-argument description the model reads alongside the docstring.
+* `Field(ge=1, le=50)`: numeric bounds. They land in the schema as `"minimum": 1, "maximum": 50`.
+* `Literal["fiction", "non-fiction", "poetry"]`: an enum. The model can only pick one of those.
+
+!!! check
+    Constraints are not decoration. Call the tool with `limit=999` and the SDK answers with a
+    tool error **before your function runs**:
+
+    ```text
+    Input should be less than or equal to 50
+    ```
+
+    That error goes back to the model as the tool result, and the model reads it and retries with
+    a valid value. You wrote `le=50` once and got self-correcting agents for free.
+
+!!! info
+    If you've used FastAPI or Pydantic, you already know all of this. It's the same `Field`,
+    the same `Annotated`, the same validation. There is nothing MCP-specific to learn here.
+
+## A model as a parameter
+
+When a tool takes more than a couple of arguments, group them into a Pydantic model:
+
+```python title="server.py" hl_lines="8-11 15"
+# docs_src/tools/tutorial004.py
+from pydantic import BaseModel, Field
+
+from mcp.server import MCPServer
+
+mcp = MCPServer("Bookshop")
+
+
+class Book(BaseModel):
+    title: str
+    author: str
+    year: int = Field(ge=1450, description="Year of first publication.")
+
+
+@mcp.tool()
+def add_book(book: Book) -> str:
+    """Add a book to the catalog."""
+    return f"Added {book.title!r} by {book.author} ({book.year})."
+```
+
+The `Book` schema is nested inside the tool's input schema (as a `$defs` reference), the model fills it in as a JSON object, and your function receives a **real `Book` instance**, already validated, with `.title`, `.author` and `.year` attributes.
+
+You can mix and match: plain parameters next to model parameters, nested models, lists of models. It's Pydantic all the way down.
+
+## `async def`
+
+If a tool does I/O (calls an API, reads a file, queries a database), declare it `async def` and `await` inside it. The SDK awaits it.
+
+A plain `def` tool works too: the SDK runs it in a thread so it never blocks the server.
+
+There is nothing else to configure.
+
+## Names, titles, and annotations
+
+Everything the SDK infers, you can override in the decorator:
+
+```python title="server.py" hl_lines="7-10"
+# docs_src/tools/tutorial005.py
+from mcp.server import MCPServer
+from mcp.types import ToolAnnotations
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.tool(
+    title="Search the catalog",
+    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+)
+def search_books(query: str) -> str:
+    """Search the catalog by title or author."""
+    return f"Found 3 books matching {query!r}."
+```
+
+* `title` is a human-readable name for UIs. Clients show *"Search the catalog"* instead of `search_books`.
+* `annotations` are behavioural **hints** for the client:
+  * `read_only_hint=True`: this tool doesn't change anything.
+  * `open_world_hint=False`: it works on a closed set of things (this catalog), not the open web.
+  * The other two, `destructive_hint` and `idempotent_hint`, describe a tool that *writes*: may it
+    delete something, and is calling it twice the same as calling it once? The spec defines both
+    only for non-read-only tools, so they would say nothing on `search_books`.
+
+A well-behaved client uses them to decide things like *"do I need to ask the user before running this?"*. They are hints, not security. Never rely on a client honouring them.
+
+!!! tip
+    `name=` and `description=` are also accepted by `@mcp.tool()` if you don't want to derive them
+    from the function name and docstring. Most of the time you do.
+
+## Recap
+
+* `@mcp.tool()` on a function makes it a tool. Name from the function, description from the docstring.
+* Type hints **are** the input schema. Defaults make arguments optional.
+* `Annotated[..., Field(...)]` adds descriptions and constraints; `Literal` adds enums.
+* A Pydantic model parameter is how you take a structured "body".
+* Bad arguments are rejected for you, with an error the model can read and recover from.
+* `async def` for I/O, plain `def` for everything else.
+
+**[Structured Output](https://py.sdk.modelcontextprotocol.io/servers/structured-output/index.md)** is what happens to the value you `return`.
+
+# Structured Output
+
+Source: https://py.sdk.modelcontextprotocol.io/servers/structured-output/
+
+A tool that returns a plain `str` produces the result twice: as text in `content`, and as `{"result": "..."}` in `structured_content`.
+
+This page is about that second channel: where it comes from, every shape it can take, and how the SDK keeps it honest.
+
+The short version: **the return type annotation is the output schema**. You already wrote it.
+
+## The output schema
+
+```python title="server.py" hl_lines="9"
+# docs_src/structured_output/tutorial001.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Weather")
+
+READINGS = {"London": 17, "Cairo": 34, "Reykjavik": 4}
+
+
+@mcp.tool()
+def get_temperature(city: str) -> int:
+    """Current temperature in a city, in whole degrees Celsius."""
+    return READINGS[city]
+```
+
+The line that matters is the signature: `-> int`.
+
+Because of it, the tool the SDK sends during `tools/list` carries an `output_schema` next to the input schema it builds from your parameters (**[Tools](https://py.sdk.modelcontextprotocol.io/servers/tools/index.md)** covers that one):
+
+```json
+{
+  "properties": {
+    "result": {"title": "Result", "type": "integer"}
+  },
+  "required": ["result"],
+  "title": "get_temperatureOutput",
+  "type": "object"
+}
+```
+
+A bare `int` isn't a JSON object, so the SDK **wraps** it in `{"result": ...}`. Call the tool and both channels are filled:
+
+```python
+result.content             # [TextContent(text="17")]
+result.structured_content  # {"result": 17}
+```
+
+Every scalar gets the same wrapper: `str`, `int`, `float`, `bool`, `bytes`, `None`.
+
+## Two channels
+
+Why send the same value twice?
+
+* `content` is for the **model**. A language model reads text; this is the only part of the result it sees.
+* `structured_content` is for the **application** the model runs inside: code that wants `17`, not a sentence containing "17".
+* `output_schema` is the contract between them, published before the tool is ever called.
+
+You return one Python value. The SDK fills in all three.
+
+## Return a model
+
+Declare the shape as a Pydantic `BaseModel` and return an instance:
+
+```python title="server.py" hl_lines="8-11 15"
+# docs_src/structured_output/tutorial002.py
+from pydantic import BaseModel, Field
+
+from mcp.server import MCPServer
+
+mcp = MCPServer("Weather")
+
+
+class WeatherData(BaseModel):
+    temperature: float = Field(description="Degrees Celsius.")
+    humidity: float = Field(description="Relative humidity, 0 to 1.")
+    conditions: str
+
+
+@mcp.tool()
+def get_weather(city: str) -> WeatherData:
+    """Current weather for a city."""
+    return WeatherData(temperature=16.2, humidity=0.83, conditions="Overcast")
+```
+
+`WeatherData` **is** the schema now. No wrapper, no `result` key:
+
+```json
+{
+  "properties": {
+    "temperature": {"description": "Degrees Celsius.", "title": "Temperature", "type": "number"},
+    "humidity": {"description": "Relative humidity, 0 to 1.", "title": "Humidity", "type": "number"},
+    "conditions": {"title": "Conditions", "type": "string"}
+  },
+  "required": ["temperature", "humidity", "conditions"],
+  "title": "WeatherData",
+  "type": "object"
+}
+```
+
+`structured_content` is the object, field for field:
+
+```python
+result.structured_content  # {"temperature": 16.2, "humidity": 0.83, "conditions": "Overcast"}
+```
+
+And the model is not left out. The SDK serializes the same object to JSON text for `content`:
+
+```json
+{
+  "temperature": 16.2,
+  "humidity": 0.83,
+  "conditions": "Overcast"
+}
+```
+
+Notice the `Field(description=...)` on `temperature` and `humidity` landed in the schema. The same `Field` that described your **inputs** describes your outputs.
+
+!!! info
+    If you've used FastAPI's `response_model`, you already know this: a Pydantic model as the declared
+    response, serialized and documented for you. The only difference is that here the return annotation
+    is the whole declaration.
+
+## A `TypedDict`
+
+Not every shape deserves a class. A `TypedDict` produces the same schema:
+
+```python title="server.py" hl_lines="8"
+# docs_src/structured_output/tutorial003.py
+from typing import TypedDict
+
+from mcp.server import MCPServer
+
+mcp = MCPServer("Weather")
+
+
+class WeatherData(TypedDict):
+    temperature: float
+    humidity: float
+    conditions: str
+
+
+@mcp.tool()
+def get_weather(city: str) -> WeatherData:
+    """Current weather for a city."""
+    return WeatherData(temperature=16.2, humidity=0.83, conditions="Overcast")
+```
+
+A `TypedDict` is a plain `dict` at runtime, so that is what you build and return. The schema, the validation, and `structured_content` follow the same rules as the `BaseModel` version: add a class docstring or `Annotated[..., Field(description=...)]` and they become the descriptions, and a `NotRequired` key you leave out of the dict stays out of `structured_content`.
+
+## A dataclass
+
+Dataclasses work too, and so does any ordinary class whose attributes have type hints. The SDK builds a Pydantic model out of the annotations behind the scenes.
+
+```python title="server.py" hl_lines="8-9"
+# docs_src/structured_output/tutorial004.py
+from dataclasses import dataclass
+
+from mcp.server import MCPServer
+
+mcp = MCPServer("Weather")
+
+
+@dataclass
+class WeatherData:
+    temperature: float
+    humidity: float
+    conditions: str
+
+
+@mcp.tool()
+def get_weather(city: str) -> WeatherData:
+    """Current weather for a city."""
+    return WeatherData(temperature=16.2, humidity=0.83, conditions="Overcast")
+```
+
+Three spellings, one schema. Use whichever your codebase already has.
+
+## Lists
+
+A `list[...]` isn't a JSON object either, so it gets the `{"result": ...}` wrapper, with your item type as a `$defs` reference inside it:
+
+```python title="server.py" hl_lines="15"
+# docs_src/structured_output/tutorial005.py
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+
+mcp = MCPServer("Weather")
+
+
+class WeatherData(BaseModel):
+    temperature: float
+    humidity: float
+    conditions: str
+
+
+@mcp.tool()
+def get_forecast(city: str, days: int) -> list[WeatherData]:
+    """Daily forecast for a city."""
+    return [WeatherData(temperature=16.2 + day, humidity=0.83, conditions="Overcast") for day in range(days)]
+```
+
+```json
+{
+  "$defs": {
+    "WeatherData": {
+      "properties": {
+        "temperature": {"title": "Temperature", "type": "number"},
+        "humidity": {"title": "Humidity", "type": "number"},
+        "conditions": {"title": "Conditions", "type": "string"}
+      },
+      "required": ["temperature", "humidity", "conditions"],
+      "title": "WeatherData",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "result": {"items": {"$ref": "#/$defs/WeatherData"}, "title": "Result", "type": "array"}
+  },
+  "required": ["result"],
+  "title": "get_forecastOutput",
+  "type": "object"
+}
+```
+
+Ask for a two-day forecast and `structured_content` is `{"result": [{...}, {...}]}`. `content` becomes **two** `TextContent` blocks, one per item: a list is flattened for the model rather than dumped as one string.
+
+`tuple[...]`, unions, and `Optional[...]` are wrapped the same way.
+
+## Dictionaries
+
+`dict[str, ...]` is the one generic that already *is* a JSON object, so it isn't wrapped:
+
+```python title="server.py" hl_lines="9"
+# docs_src/structured_output/tutorial006.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Weather")
+
+READINGS = {"London": 16.2, "Cairo": 34.1, "Reykjavik": 4.4}
+
+
+@mcp.tool()
+def get_temperatures(cities: list[str]) -> dict[str, float]:
+    """Current temperature for each city, in degrees Celsius."""
+    return {city: READINGS[city] for city in cities}
+```
+
+```json
+{
+  "additionalProperties": {"type": "number"},
+  "title": "get_temperaturesDictOutput",
+  "type": "object"
+}
+```
+
+```python
+result.structured_content  # {"London": 16.2, "Reykjavik": 4.4}
+```
+
+The keys must be `str`. A `dict[int, float]` can't be a JSON object, so it falls back to the `{"result": ...}` wrapper.
+
+Dictionary results use Pydantic's `TypeAdapter` for validation and serialization. If you inspect a tool's `FuncMetadata.output_model`, it holds the dictionary type annotation with its schema title.
+
+## Validation
+
+`output_schema` is not documentation. Whatever your function returns is **validated against it** before it leaves the server.
+
+You don't notice while you build the value by hand: Pydantic already made sure your `WeatherData` was a `WeatherData`. You notice the day the data comes from somewhere you don't control:
+
+```python title="server.py" hl_lines="9 21"
+# docs_src/structured_output/tutorial007.py
+import json
+
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+
+mcp = MCPServer("Weather")
+
+UPSTREAM = {"London": '{"temperature": 16.2, "conditions": "Overcast"}'}
+
+
+class WeatherData(BaseModel):
+    temperature: float
+    humidity: float
+    conditions: str
+
+
+@mcp.tool()
+def get_weather(city: str) -> WeatherData:
+    """Current weather for a city."""
+    return json.loads(UPSTREAM[city])
+```
+
+The annotation promises `WeatherData`. The upstream response stopped sending `humidity`.
+
+!!! check
+    Call `get_weather` and it does not quietly hand the client a half-empty object. The call fails:
+    the client gets `is_error=True` with `Error executing tool get_weather`, so the model knows the
+    call failed instead of confidently reading weather that isn't there. The field name is for you,
+    in the server log at `ERROR`:
+
+    ```text
+    Tool 'get_weather' raised an unexpected exception
+    ...
+    pydantic_core._pydantic_core.ValidationError: 1 validation error for WeatherData
+    humidity
+      Field required [type=missing, input_value={'temperature': 16.2, 'conditions': 'Overcast'}, input_type=dict]
+    ```
+
+Returning a plain `dict` from a `-> WeatherData` tool is fine, by the way. That's exactly what `json.loads` produced. Validation is on the value, not on the Python type.
+
+## Opting out
+
+Sometimes the return annotation is for your type checker, not for the protocol. Pass `structured_output=False` and the tool is text-only:
+
+```python title="server.py" hl_lines="6"
+# docs_src/structured_output/tutorial008.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Weather")
+
+
+@mcp.tool(structured_output=False)
+def weather_report(city: str) -> str:
+    """A human-readable weather report for a city."""
+    return f"{city}: 17 degrees, overcast, light rain easing by evening."
+```
+
+No `output_schema`, no wrapping, no validation. `structured_content` is `None` and `content` is the string you returned.
+
+The opposite, `structured_output=True`, turns the automatic detection into a requirement: a tool whose return type can't produce a schema raises at import time instead of falling back to text.
+
+## Content blocks and media
+
+Content blocks and media (`TextContent`, `EmbeddedResource`, `Image`, `Audio` and friends, on their own, as the items of a `list`, `tuple` or `Sequence`, or as the arms of a union) are opted out for you: they are for the model to read, so auto-detection derives no schema from them (**[Images, audio & icons](https://py.sdk.modelcontextprotocol.io/servers/media/index.md)** covers `Image` and `Audio`). `structured_output=True` still forces one for the content-block classes.
+
+## A class without type hints
+
+There is one way to end up unstructured without asking for it: return a class that has **no annotations on its body**.
+
+```python title="server.py" hl_lines="6-9"
+# docs_src/structured_output/tutorial009.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Weather")
+
+
+class Station:
+    def __init__(self, name: str, online: bool):
+        self.name = name
+        self.online = online
+
+
+@mcp.tool()
+def get_station(name: str) -> Station:
+    """Look up a weather station by name."""
+    return Station(name=name, online=True)
+```
+
+`Station` sets `name` and `online` inside `__init__`, but the *class* declares nothing. The SDK reads class annotations, finds none, and gives up.
+
+!!! warning
+    It gives up **silently**. `output_schema` is `None`, `structured_content` is `None`, and the text
+    the model reads is the object's `repr`:
+
+    ```text
+    "<server.Station object at 0x7f539d75b230>"
+    ```
+
+    No error, no warning, a useless tool. Move the annotations onto the class body, or pass
+    `structured_output=True`, which turns this into a hard error the moment the module imports:
+    `Function get_station: return type <class 'server.Station'> is not serializable for structured output`.
+
+!!! tip
+    Need full control (building the `CallToolResult` yourself, or attaching `_meta` that the
+    application can see but the model can't)? That's **[The low-level Server](https://py.sdk.modelcontextprotocol.io/advanced/low-level-server/index.md)**.
+
+## Recap
+
+* The **return type annotation** is the output schema. It's published in `tools/list` as `output_schema`.
+* Scalars, lists, tuples and unions are wrapped in `{"result": ...}`. Models, `TypedDict`s, dataclasses, annotated classes and `dict[str, ...]` are objects already and stay as they are.
+* Every result carries `content` (text, for the model) **and** `structured_content` (data, for the application).
+* What you return is validated against the schema. A mismatch is a tool error, not a corrupt result.
+* `structured_output=False` opts a tool out. Content blocks, `Image` and `Audio` opt out by default; a class without type hints opts out silently, so watch for it.
+
+You now own everything a tool can say back. Next, the second primitive: **[Resources](https://py.sdk.modelcontextprotocol.io/servers/resources/index.md)**.
+
+# Resources
+
+Source: https://py.sdk.modelcontextprotocol.io/servers/resources/
+
+A **resource** is data you expose for the application to read.
+
+That's the split. A tool is something the **model** decides to call. A resource is something the **application** decides to load (a config file, a record, a document) and put in front of the model as context.
+
+You declare one by putting `@mcp.resource(uri)` on a plain Python function.
+
+## Your first resource
+
+```python title="server.py" hl_lines="6-8"
+# docs_src/resources/tutorial001.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.resource("config://app")
+def get_config() -> str:
+    """The active shop configuration."""
+    return "theme=dark\nlanguage=en"
+```
+
+It's the same shape as a tool, plus one thing: the **URI**. Resources are addressed, not named. A client asks for `config://app`, never for `get_config`.
+
+The SDK still reads the rest from the function:
+
+* The **name** is the function name: `get_config`.
+* The **description** the client sees is the docstring.
+* The **content** is whatever you return.
+
+During `resources/list` the client gets this:
+
+```json
+{
+  "name": "get_config",
+  "uri": "config://app",
+  "description": "The active shop configuration.",
+  "mimeType": "text/plain"
+}
+```
+
+And when it reads `config://app`, your function runs and the return value comes back as text:
+
+```python
+result.contents  # [TextResourceContents(uri="config://app", mime_type="text/plain", text="theme=dark\nlanguage=en")]
+```
+
+!!! tip
+    Listing is cheap. Your function is **not** called during `resources/list`, only during
+    `resources/read`, and only for the URI that was asked for. Expose a thousand resources
+    and you pay for the ones somebody opens.
+
+### Try it
+
+Run the server with the MCP Inspector:
+
+```console
+uv run mcp dev server.py
+```
+
+Open the URL it prints and go to the **Resources** tab. `config://app` is in the list with its description. Click it and the Inspector reads it: there are your two lines of config.
+
+## Resource templates
+
+One URI per record doesn't scale. Put a **placeholder** in the URI and a matching parameter on the function:
+
+```python title="server.py" hl_lines="12-13"
+# docs_src/resources/tutorial002.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.resource("config://app")
+def get_config() -> str:
+    """The active shop configuration."""
+    return "theme=dark\nlanguage=en"
+
+
+@mcp.resource("users://{user_id}/profile")
+def get_user_profile(user_id: str) -> str:
+    """A customer's profile."""
+    return f"User {user_id}: 12 orders since 2021."
+```
+
+`{user_id}` in the URI, `user_id: str` on the function. That is the entire contract.
+
+This is now a **resource template**, and it moves house: it leaves `resources/list` and shows up in `resources/templates/list` instead, as a pattern rather than an address:
+
+```json
+{
+  "name": "get_user_profile",
+  "uriTemplate": "users://{user_id}/profile",
+  "description": "A customer's profile.",
+  "mimeType": "text/plain"
+}
+```
+
+The client fills in the placeholder and reads a concrete URI: `users://42/profile`, `users://ada/profile`. One function answers all of them, with the matched value passed in as `user_id`:
+
+```python
+result.contents  # [TextResourceContents(uri="users://42/profile", text="User 42: 12 orders since 2021.")]
+```
+
+Notice the `uri` in the result. It is the **concrete** URI the client asked for, not the template.
+
+!!! check
+    The placeholders and the parameters have to agree. Rename the function parameter to
+    `user` while the URI still says `{user_id}` and the decorator refuses **at import time**,
+    before any client gets near it:
+
+    ```text
+    ValueError: Mismatch between URI parameters {'user_id'} and function parameters {'user'}
+    ```
+
+    A mismatch can only ever be a bug, so the SDK makes it impossible to start the server with one.
+
+The placeholder syntax is [RFC 6570](https://datatracker.ietf.org/doc/html/rfc6570): `{+path}` for multi-segment values, `{?q,lang}` for optional query parameters, and more. The SDK also applies path-safety checks to extracted values by default. See **[URI templates and path safety](https://py.sdk.modelcontextprotocol.io/servers/uri-templates/index.md)** for the full reference.
+
+`get_user_profile` can also take a parameter annotated `Context`. The SDK injects it without ever treating it as a URI parameter, and **[The Context](https://py.sdk.modelcontextprotocol.io/handlers/context/index.md)** page covers what it gives you.
+
+## What you return
+
+You're not limited to `str`. Give each resource a `mime_type` and return whatever fits:
+
+```python title="server.py" hl_lines="8-9 14-15 20-21"
+# docs_src/resources/tutorial003.py
+import base64
+
+from mcp.server import MCPServer
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.resource("docs://readme", mime_type="text/markdown")
+def readme() -> str:
+    """How to use this server."""
+    return "# Bookshop\n\nSearch the catalog with the `search_books` tool."
+
+
+@mcp.resource("stats://catalog", mime_type="application/json")
+def catalog_stats() -> dict[str, int]:
+    """Live counts for the catalog."""
+    return {"books": 1204, "authors": 391}
+
+
+@mcp.resource("covers://placeholder", mime_type="image/gif")
+def placeholder_cover() -> bytes:
+    """A 1x1 transparent GIF, shown when a book has no cover."""
+    return base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
+```
+
+* `readme` returns a `str`, so it's sent as-is. This is the common case.
+* `catalog_stats` returns a `dict`, so the SDK serialises it to **JSON text** for you:
+
+    ```json
+    {
+      "books": 1204,
+      "authors": 391
+    }
+    ```
+
+* `placeholder_cover` returns `bytes`, so the client gets a `BlobResourceContents` instead of a `TextResourceContents`, with your bytes base64-encoded in its `blob` field.
+
+The same rule applies to anything else JSON-serialisable: a list, a Pydantic model, a dataclass. If it isn't a `str` and isn't `bytes`, it becomes JSON.
+
+`mime_type` is yours to declare, and it defaults to `text/plain`. The SDK never inspects what you return to guess it, so a `dict` resource you don't label is still advertised as plain text.
+
+!!! tip
+    `name=`, `title=` and `description=` are also accepted by `@mcp.resource()` when you don't
+    want to derive them from the function. And when there's no function to write at all,
+    `mcp.server.mcpserver.resources` has ready-made `Resource` classes (`TextResource`,
+    `BinaryResource`, `FileResource`, `HttpResource`, `DirectoryResource`) that you register
+    with `mcp.add_resource(...)`.
+
+A client can also **subscribe** to a resource and be notified when it changes; that's the client's half of the story and it lives in **[The Client](https://py.sdk.modelcontextprotocol.io/client/index.md)**.
+
+## Recap
+
+* `@mcp.resource(uri)` on a function makes it a resource. The URI is the address, the return value is the content, the docstring is the description.
+* A `{placeholder}` in the URI makes it a **template**: it's listed under `resources/templates/list` and one function serves every URI that matches.
+* Placeholder names must equal the function's parameter names. Get it wrong and you find out at import time, not in production.
+* Your function runs when the resource is **read**, not when it's listed.
+* `str` becomes text, `bytes` becomes a base64 blob, anything else becomes JSON text. `mime_type=` is how you label it.
+* Tools are for the model to act. Resources are for the application to read.
+
+The third primitive, the one a person picks from a menu, is **[Prompts](https://py.sdk.modelcontextprotocol.io/servers/prompts/index.md)**.
+
+# URI templates
+
+Source: https://py.sdk.modelcontextprotocol.io/servers/uri-templates/
+
+This is the reference for the URI-template syntax that
+[`@mcp.resource`](https://py.sdk.modelcontextprotocol.io/servers/resources/index.md) accepts, and for the
+path-safety policy the SDK applies to extracted values. For an
+introduction to what resources are and when to use them, start with
+**[Resources](https://py.sdk.modelcontextprotocol.io/servers/resources/index.md)**; this page assumes you're already comfortable declaring a
+resource and want the full operator set, the security knobs, or the
+low-level wiring.
+
+The template syntax is [RFC 6570](https://datatracker.ietf.org/doc/html/rfc6570).
+The SDK supports a subset chosen for matching incoming `resources/read`
+URIs, plus a security layer that rejects values that would resolve
+outside the directory you intend to serve. For the protocol-level
+details (message formats, lifecycle, pagination) see the
+[MCP resources specification](https://modelcontextprotocol.io/specification/latest/server/resources).
+
+## The full operator set
+
+The plain placeholder, `{user_id}`, is the one **[Resources](https://py.sdk.modelcontextprotocol.io/servers/resources/index.md)** introduces. There are four more
+operator forms; here they are on one server so you can see them next to
+each other:
+
+```python title="server.py" hl_lines="16-17 22-23 28-29 34-35 40-41"
+# docs_src/uri_templates/tutorial001.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Bookshop")
+
+BOOKS = {
+    "978-0441172719": {"title": "Dune", "author": "Frank Herbert"},
+    "978-0553293357": {"title": "Foundation", "author": "Isaac Asimov"},
+}
+
+MANUALS = {
+    "printing/setup.md": "# Printer setup\n\nLoad paper, then power on.",
+    "returns.md": "# Returns policy\n\nThirty days with a receipt.",
+}
+
+
+@mcp.resource("books://{isbn}")
+def get_book(isbn: str) -> dict[str, str]:
+    """A single book by ISBN."""
+    return BOOKS[isbn]
+
+
+@mcp.resource("orders://{order_id}")
+def get_order(order_id: int) -> dict[str, object]:
+    """An order by its numeric id."""
+    return {"order_id": order_id, "next_order": order_id + 1, "status": "shipped"}
+
+
+@mcp.resource("manuals://{+path}")
+def read_manual(path: str) -> str:
+    """A staff manual page. The path keeps its slashes."""
+    return MANUALS[path]
+
+
+@mcp.resource("reviews://{isbn}{?limit,sort}")
+def list_reviews(isbn: str, limit: int = 10, sort: str = "newest") -> str:
+    """Reviews of a book, optionally limited and sorted."""
+    return f"{limit} {sort} reviews of {BOOKS[isbn]['title']}"
+
+
+@mcp.resource("shelves://browse{/path*}")
+def browse_shelf(path: list[str]) -> str:
+    """A shelf in the category tree, addressed by segments."""
+    return " > ".join(["catalog", *path])
+```
+
+Each highlighted decorator is a different way of carving up the URI.
+The sections below walk them top to bottom.
+
+### Simple expansion: `{name}`
+
+`books://{isbn}` is the plain, everyday form. The placeholder maps to
+the `isbn` parameter, so a client reading `books://978-0441172719` calls
+`get_book("978-0441172719")`.
+
+A plain `{name}` stops at the first `/`. `books://978/extra` does not
+match because the slash after `978` ends the capture and `/extra` is
+left over.
+
+### Type conversion
+
+Extracted values arrive as strings, but you can declare a more specific
+type and the SDK will convert. `orders://{order_id}` lands in a function
+whose parameter is `order_id: int`, so reading `orders://12345` calls
+`get_order(12345)`, not `get_order("12345")`. The handler does
+arithmetic on it (`order_id + 1`) without a cast.
+
+### Multi-segment paths: `{+name}`
+
+To capture a value that contains slashes, use `{+name}`. With
+`manuals://{+path}`:
+
+* `manuals://returns.md` gives `path = "returns.md"`
+* `manuals://printing/setup.md` gives `path = "printing/setup.md"`
+
+Reach for `{+name}` whenever the value is hierarchical: filesystem
+paths, nested object keys, URL paths you're proxying.
+
+### Query parameters: `{?a,b,c}`
+
+`reviews://{isbn}{?limit,sort}` puts `limit` and `sort` after the `?`.
+The path identifies *which* book; the query tunes *how* you read it.
+
+Query params are matched leniently: order doesn't matter, extras are
+ignored, and omitted params fall through to your function defaults. So
+`reviews://978-0441172719` uses `limit=10, sort="newest"`, and
+`reviews://978-0441172719?sort=top` overrides only `sort`.
+
+### Path segments as a list: `{/name*}`
+
+If you want each path segment as a separate list item rather than one
+string with slashes, use `{/name*}`. With `shelves://browse{/path*}`, a
+client reading `shelves://browse/fiction/sci-fi` calls
+`browse_shelf(["fiction", "sci-fi"])`.
+
+### Template reference
+
+The most common patterns:
+
+| Pattern      | Example input         | You get                 |
+|--------------|-----------------------|-------------------------|
+| `{name}`     | `alice`               | `"alice"`               |
+| `{name}`     | `docs/intro.md`       | *no match* (stops at `/`) |
+| `{+path}`    | `docs/intro.md`       | `"docs/intro.md"`       |
+| `{.ext}`     | `.json`               | `"json"`                |
+| `{/segment}` | `/v2`                 | `"v2"`                  |
+| `{?key}`     | `?key=value`          | `"value"`               |
+| `{?a,b}`     | `?a=1&b=2`            | `"1"`, `"2"`            |
+| `{/path*}`   | `/a/b/c`              | `["a", "b", "c"]`       |
+
+### What the parser rejects
+
+A few template shapes are caught up front rather than failing on the
+first request. `@mcp.resource` parses the template when the decorator
+runs, so none of these ever reach a running server.
+
+`UriTemplate.parse()` raises `InvalidUriTemplate` for:
+
+* **Two variables with nothing between them.** `manuals://{+path}{ext}`
+  is rejected: matching can't tell where `path` ends and `ext` begins.
+  Put a literal between them (`manuals://{+path}/{ext}`), or use an
+  operator that supplies its own delimiter. `manuals://{+path}{.ext}`
+  is accepted because `{.ext}` contributes the `.` itself.
+* **More than one multi-segment variable.** At most one of `{+var}`,
+  `{#var}`, or an exploded variable (`{/var*}`, `{.var*}`, `{;var*}`)
+  per template. Two are inherently ambiguous: there is no principled
+  way to decide which one absorbs an extra segment.
+* **The usual syntax errors**: an unclosed brace, a variable name used
+  twice, or an RFC 6570 feature the SDK doesn't support, such as the
+  `{var:3}` prefix modifier or the `{?vars*}` query explode.
+
+On top of that, `@mcp.resource` raises `ValueError` when a handler
+parameter is bound to a query variable in the template's trailing
+`{?...}`/`{&...}` run but has no Python default. Those variables are
+matched leniently (a client may leave any of them out), so a parameter
+without a default would only surface as an opaque internal error on the
+first request that omits it. `reviews://{isbn}{?limit,sort}` in the
+server above is the well-formed version: `limit` and `sort` both carry
+defaults.
+
+## Security
+
+Template parameters come from the client. If they flow into filesystem
+or database operations unchecked, values like `../../etc/passwd` can
+resolve outside the directory you intended to serve.
+
+### What the SDK checks by default
+
+Before your handler runs, the SDK rejects any parameter that:
+
+* would escape its starting directory via `..` components
+* looks like an absolute path (`/etc/passwd`, `C:\Windows`) or a
+  Windows drive-relative one (`C:foo`). A drive-relative value and a
+  namespaced identifier like `x:y` are indistinguishable as strings,
+  so any single-letter-plus-colon value is rejected by default;
+  exempt the parameter if it legitimately receives such values
+* contains a null byte (`\x00`)
+
+The `..` check is component-based, not a substring scan. Values like
+`v1.0..v2.0` or `HEAD~3..HEAD` pass because `..` is not a standalone
+path segment there.
+
+These checks apply to the decoded value, so they catch traversal
+regardless of how it was encoded in the URI (`../etc`, `..%2Fetc`,
+`%2E%2E/etc`, `..%5Cetc`, `%00` all get caught).
+
+!!! check
+    Read `manuals://../etc/passwd` from the server above and the request
+    is rejected outright: template matching stops at the first failure,
+    so no later (potentially more permissive) template is tried as a
+    fallback. The client sees the same `-32602` "Unknown resource" error
+    it would for a URI that matches no template at all, and
+    `read_manual` never runs.
+
+### Filesystem handlers: use safe_join
+
+The built-in checks stop the common cases but can't know your sandbox
+boundary. For filesystem access, use `safe_join` to resolve the path
+and verify it stays inside your base directory:
+
+```python title="server.py" hl_lines="5 15"
+# docs_src/uri_templates/tutorial002.py
+from pathlib import Path
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ResourceNotFoundError
+from mcp.shared.path_security import safe_join
+
+mcp = MCPServer("Bookshop")
+
+DOCS_ROOT = Path("./manuals")
+
+
+@mcp.resource("manuals://{+path}")
+def read_manual(path: str) -> str:
+    """A staff manual page, served from a directory on disk."""
+    file = safe_join(DOCS_ROOT, path)
+    if not file.is_file():
+        raise ResourceNotFoundError(f"No manual at {path!r}.")
+    return file.read_text(encoding="utf-8")
+```
+
+`safe_join` catches symlink escapes, `..` sequences, and absolute-path
+tricks that a simple string check would miss. If the resolved path
+escapes `DOCS_ROOT`, it raises `PathEscapeError`, which surfaces to the
+client as a `ResourceError`.
+
+### When the defaults get in the way
+
+Sometimes the checks block legitimate values. A catalog-import tool
+might intentionally receive an absolute path, or a parameter might be a
+relative reference like `../sibling` that your handler interprets
+safely without touching the filesystem. Exempt that parameter, or relax
+the policy for the whole server:
+
+```python title="server.py" hl_lines="9 16-19"
+# docs_src/uri_templates/tutorial003.py
+from mcp.server import MCPServer
+from mcp.server.mcpserver import ResourceSecurity
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.resource(
+    "imports://preview/{+source}",
+    security=ResourceSecurity(exempt_params={"source"}),
+)
+def preview_import(source: str) -> str:
+    """Preview a catalog import. `source` may be an absolute path."""
+    return f"Would import from {source}"
+
+
+relaxed = MCPServer(
+    "Bookshop",
+    resource_security=ResourceSecurity(reject_path_traversal=False),
+)
+
+
+@relaxed.resource("imports://preview/{+source}")
+def preview_import_relaxed(source: str) -> str:
+    """The server-wide flag exempts every resource on `relaxed`."""
+    return f"Would import from {source}"
+```
+
+* `security=ResourceSecurity(exempt_params={"source"})` on the decorator
+  skips the checks for that one parameter on that one resource. The
+  rest of the server keeps the default policy.
+* `resource_security=` on the `MCPServer` constructor sets the default
+  for every resource. Here `relaxed` turns off the `..` check entirely.
+
+The configurable checks:
+
+| Setting                 | Default | What it does                        |
+|-------------------------|---------|-------------------------------------|
+| `reject_path_traversal` | `True`  | Rejects `..` sequences that escape the starting directory |
+| `reject_absolute_paths` | `True`  | Rejects `/foo`, `C:\foo`, UNC paths, and drive-relative `C:foo` (also catches `x:y`) |
+| `reject_null_bytes`     | `True`  | Rejects values containing `\x00`    |
+| `exempt_params`         | empty   | Parameter names to skip checks for  |
+
+These checks are a heuristic pre-filter; for filesystem access,
+`safe_join` remains the containment boundary.
+
+!!! tip
+    If your handler can't fulfil the request (the file doesn't exist, the id is unknown), raise
+    `ResourceNotFoundError` as `read_manual` does above. The client gets `-32602` with your message
+    and the URI. An unexpected exception becomes a generic `-32603` instead. See
+    **[Handling errors](https://py.sdk.modelcontextprotocol.io/servers/handling-errors/index.md#a-resource-that-doesnt-exist)**.
+
+## Resources on the low-level Server
+
+If you're building on the low-level `Server` (see **[The low-level
+Server](https://py.sdk.modelcontextprotocol.io/advanced/low-level-server/index.md)**), you register handlers for the `resources/list` and
+`resources/read` protocol methods directly. There's no decorator; you
+return the protocol types yourself.
+
+### Static resources
+
+For fixed URIs, keep a registry and dispatch on exact match:
+
+```python title="server.py" hl_lines="17 21 27"
+# docs_src/uri_templates/tutorial004.py
+from mcp.server import Server, ServerRequestContext
+from mcp.types import (
+    ListResourcesResult,
+    PaginatedRequestParams,
+    ReadResourceRequestParams,
+    ReadResourceResult,
+    Resource,
+    TextResourceContents,
+)
+
+RESOURCES = {
+    "config://shop": '{"currency": "USD", "tax_rate": 0.08}',
+    "status://health": "ok",
+}
+
+
+async def list_resources(ctx: ServerRequestContext, params: PaginatedRequestParams | None) -> ListResourcesResult:
+    return ListResourcesResult(resources=[Resource(name=uri, uri=uri) for uri in RESOURCES])
+
+
+async def read_resource(ctx: ServerRequestContext, params: ReadResourceRequestParams) -> ReadResourceResult:
+    if (text := RESOURCES.get(params.uri)) is not None:
+        return ReadResourceResult(contents=[TextResourceContents(uri=params.uri, text=text)])
+    raise ValueError(f"Unknown resource: {params.uri}")
+
+
+server = Server("Bookshop", on_list_resources=list_resources, on_read_resource=read_resource)
+```
+
+The list handler tells clients what's available; the read handler
+serves the content. Check your registry first, fall through to
+templates (below) if you have any, then raise for anything else.
+
+### Templates
+
+The template engine `MCPServer` uses lives in `mcp.shared.uri_template`
+and works on its own. You get the same parsing and matching; you wire
+up the routing and security policy yourself.
+
+```python title="server.py" hl_lines="13-16 22-25 29 33 45"
+# docs_src/uri_templates/tutorial005.py
+from mcp.server import Server, ServerRequestContext
+from mcp.shared.path_security import contains_path_traversal, is_absolute_path
+from mcp.shared.uri_template import UriTemplate
+from mcp.types import (
+    ListResourceTemplatesResult,
+    PaginatedRequestParams,
+    ReadResourceRequestParams,
+    ReadResourceResult,
+    ResourceTemplate,
+    TextResourceContents,
+)
+
+TEMPLATES = {
+    "manuals": UriTemplate.parse("manuals://{+path}"),
+    "books": UriTemplate.parse("books://{isbn}"),
+}
+
+MANUALS = {"printing/setup.md": "# Printer setup", "returns.md": "# Returns policy"}
+BOOKS = {"978-0441172719": "Dune by Frank Herbert"}
+
+
+def read_manual_safely(path: str) -> str:
+    if contains_path_traversal(path) or is_absolute_path(path):
+        raise ValueError("rejected")
+    return MANUALS[path]
+
+
+async def read_resource(ctx: ServerRequestContext, params: ReadResourceRequestParams) -> ReadResourceResult:
+    if (matched := TEMPLATES["manuals"].match(params.uri)) is not None:
+        text = read_manual_safely(str(matched["path"]))
+        return ReadResourceResult(contents=[TextResourceContents(uri=params.uri, text=text)])
+
+    if (matched := TEMPLATES["books"].match(params.uri)) is not None:
+        text = BOOKS[str(matched["isbn"])]
+        return ReadResourceResult(contents=[TextResourceContents(uri=params.uri, text=text)])
+
+    raise ValueError(f"Unknown resource: {params.uri}")
+
+
+async def list_resource_templates(
+    ctx: ServerRequestContext, params: PaginatedRequestParams | None
+) -> ListResourceTemplatesResult:
+    return ListResourceTemplatesResult(
+        resource_templates=[
+            ResourceTemplate(name=name, uri_template=str(template)) for name, template in TEMPLATES.items()
+        ]
+    )
+
+
+server = Server(
+    "Bookshop",
+    on_read_resource=read_resource,
+    on_list_resource_templates=list_resource_templates,
+)
+```
+
+Three things are happening in the highlighted lines:
+
+* **Parse once, match per request.** `UriTemplate.parse()` builds the
+  template; `template.match(uri)` returns the extracted variables as a
+  `dict`, or `None` if the URI doesn't fit. URL decoding happens inside
+  `match()`; the decoded values are returned as-is without path-safety
+  validation. Values come out as strings: convert them yourself
+  (`int(matched["id"])`, `Path(matched["path"])`).
+* **Apply the safety checks yourself.** The `..` and absolute-path
+  checks `MCPServer` runs by default live in `mcp.shared.path_security`.
+  `read_manual_safely` calls them before touching `MANUALS`. If a
+  parameter isn't a filesystem path (an ISBN, a search query), skip the
+  checks for that value: you control the policy per handler rather than
+  through a config object.
+* **List the templates from the same source.** Clients discover
+  templates through `resources/templates/list`. `str(template)` gives
+  back the original template string, so the listing and the matcher
+  share one source of truth.
+
+## Recap
+
+* `{name}` matches one segment; `{+name}` keeps the slashes; `{?a,b}`
+  pulls from the query string; `{/name*}` splits segments into a list.
+* Two variables with nothing between them, or a second multi-segment
+  variable, are rejected at parse time. A parameter bound to a trailing
+  `{?...}`/`{&...}` query variable must declare a Python default.
+* Annotate the parameter (`order_id: int`) and the SDK converts.
+* The default security policy rejects `..`, absolute paths, and null
+  bytes before your handler runs; override per resource with
+  `security=ResourceSecurity(...)` or server-wide with
+  `resource_security=`.
+* For filesystem access, `safe_join` is the containment boundary.
+* On the low-level `Server`, parse with `UriTemplate.parse()`, match
+  with `.match()`, and apply `mcp.shared.path_security` yourself.
+
+# Prompts
+
+Source: https://py.sdk.modelcontextprotocol.io/servers/prompts/
+
+A **prompt** is a message template the user picks.
+
+Tools are for the model. A prompt is the opposite: the user chooses one from a menu in their client (a slash command, a button), fills in its arguments, and the rendered messages go into the conversation as if they had typed them.
+
+You declare one by putting `@mcp.prompt()` on a function that returns the text.
+
+## Your first prompt
+
+```python title="server.py" hl_lines="6-9"
+# docs_src/prompts/tutorial001.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Code Helper")
+
+
+@mcp.prompt()
+def review_code(code: str) -> str:
+    """Review a piece of code."""
+    return f"Please review this code:\n\n{code}"
+```
+
+The SDK reads the same three things it reads from a tool:
+
+* The **name** is the function name: `review_code`.
+* The **description** the client shows is the docstring: `Review a piece of code.`
+* The **arguments** come from the parameters. `code` has no default, so it's required.
+
+That is what a client gets back from `prompts/list`:
+
+```json
+{
+  "name": "review_code",
+  "description": "Review a piece of code.",
+  "arguments": [
+    {"name": "code", "required": true}
+  ]
+}
+```
+
+There is no JSON Schema here. Prompt arguments are a flat list of **named string values**: a form a person fills in, not a payload a model constructs.
+
+### Rendering it
+
+The client renders the template with `prompts/get`, passing the arguments. Your function runs and the `str` you return becomes **one user message**:
+
+```json
+{
+  "description": "Review a piece of code.",
+  "messages": [
+    {
+      "role": "user",
+      "content": {
+        "type": "text",
+        "text": "Please review this code:\n\ndef add(a, b): return a + b"
+      }
+    }
+  ],
+  "resultType": "complete"
+}
+```
+
+That is the entire life of a prompt: listed by name, rendered on demand, dropped into the chat.
+
+!!! check
+    `required` is enforced before your function runs. Render `review_code` without `code` and the
+    request itself fails with a JSON-RPC error (code `-32603`):
+
+    ```text
+    mcp.shared.exceptions.MCPError: Internal server error
+    ```
+
+    There is no tool-style error result to hand back to a model, because no model is in the loop:
+    the call raises. The reason (`Missing required arguments: {'code'}`) lands in your server's log.
+
+### Try it
+
+Run the server with the MCP Inspector:
+
+```console
+uv run mcp dev server.py
+```
+
+Open the **Prompts** tab and select `review_code`. The Inspector draws a form with one required `code` field. Fill it in, render it, and you get back exactly the user message above.
+
+## More than one message
+
+A code review is one message. A debugging session is a conversation, and a prompt can seed the whole thing.
+
+Return a list of messages instead of a `str`:
+
+```python title="server.py" hl_lines="2 13-20"
+# docs_src/prompts/tutorial002.py
+from mcp.server import MCPServer
+from mcp.server.mcpserver.prompts.base import AssistantMessage, Message, UserMessage
+
+mcp = MCPServer("Code Helper")
+
+
+@mcp.prompt()
+def review_code(code: str) -> str:
+    """Review a piece of code."""
+    return f"Please review this code:\n\n{code}"
+
+
+@mcp.prompt()
+def debug_error(error: str) -> list[Message]:
+    """Start a debugging conversation."""
+    return [
+        UserMessage("I'm seeing this error:"),
+        UserMessage(error),
+        AssistantMessage("I'll help debug that. What have you tried so far?"),
+    ]
+```
+
+* `UserMessage` and `AssistantMessage` come from `mcp.server.mcpserver.prompts.base`. Hand them a `str` and they wrap it in `TextContent` for you. The role is the class name.
+* `Message` is their common base. Use it as the return annotation.
+
+Rendering `debug_error` now produces three messages, in order:
+
+```json
+{
+  "description": "Start a debugging conversation.",
+  "messages": [
+    {"role": "user", "content": {"type": "text", "text": "I'm seeing this error:"}},
+    {"role": "user", "content": {"type": "text", "text": "TypeError: 'int' object is not iterable"}},
+    {
+      "role": "assistant",
+      "content": {"type": "text", "text": "I'll help debug that. What have you tried so far?"}
+    }
+  ],
+  "resultType": "complete"
+}
+```
+
+Notice the last one. Pre-filling an `assistant` turn is how you steer the model's *next* reply without making the user type the steering themselves.
+
+## Titles and argument descriptions
+
+`review_code` is a function name, not a label. Give the client something better to put on the button, and describe each argument so the form explains itself:
+
+```python title="server.py" hl_lines="10-13"
+# docs_src/prompts/tutorial003.py
+from typing import Annotated
+
+from pydantic import Field
+
+from mcp.server import MCPServer
+
+mcp = MCPServer("Code Helper")
+
+
+@mcp.prompt(title="Code review")
+def review_code(
+    code: Annotated[str, Field(description="The code to review.")],
+    language: Annotated[str, Field(description="The language the code is written in.")] = "python",
+) -> str:
+    """Review a piece of code."""
+    return f"Please review this {language} code:\n\n{code}"
+```
+
+* `title="Code review"` is the human-readable name, exactly like a tool's `title`.
+* `Annotated[str, Field(description=...)]` is the same pattern **[Tools](https://py.sdk.modelcontextprotocol.io/servers/tools/index.md)** uses to describe a tool's parameters. Here the description lands on the argument instead of in a schema.
+* `language` has a default, so it stops being required.
+
+The `prompts/list` entry now carries everything a client needs to draw a good form:
+
+```json
+{
+  "name": "review_code",
+  "title": "Code review",
+  "description": "Review a piece of code.",
+  "arguments": [
+    {"name": "code", "description": "The code to review.", "required": true},
+    {"name": "language", "description": "The language the code is written in.", "required": false}
+  ]
+}
+```
+
+!!! info
+    If you have read **[Tools](https://py.sdk.modelcontextprotocol.io/servers/tools/index.md)**, you already know everything up to this point. Same decorator, same
+    docstring-as-description, same `Annotated`/`Field`. The only things that change are who
+    triggers it (the user) and where the result goes (into the conversation).
+
+## More than text
+
+`UserMessage` and `AssistantMessage` also accept a content block, or an `Image` / `Audio` helper, wherever they accept a `str`. Two cases come up in prompts: attaching a document and attaching a picture.
+
+### Embedding a file
+
+```python title="server.py" hl_lines="5 12 21 23"
+# docs_src/prompts/tutorial004.py
+from pathlib import Path
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Message, UserMessage
+from mcp.types import EmbeddedResource, TextResourceContents
+
+mcp = MCPServer("Code Helper")
+
+STYLE_GUIDE_FILE = Path(__file__).parent / "style-guide.md"  # or the path to your file on disk
+
+
+@mcp.resource("style://python", mime_type="text/markdown")
+def style_guide() -> str:
+    """The team's Python style guide."""
+    return STYLE_GUIDE_FILE.read_text(encoding="utf-8")
+
+
+@mcp.prompt()
+def review_code(code: str) -> list[Message]:
+    """Review a piece of code against the team style guide."""
+    guide = TextResourceContents(uri="style://python", mime_type="text/markdown", text=style_guide())
+    return [
+        UserMessage(EmbeddedResource(resource=guide)),
+        UserMessage(f"Review this code against the style guide above:\n\n{code}"),
+    ]
+```
+
+* The style guide is a resource at `style://python` (**[Resources](https://py.sdk.modelcontextprotocol.io/servers/resources/index.md)** covers those), read from a `style-guide.md` next to `server.py`. Put any Markdown file there.
+* `EmbeddedResource(resource=TextResourceContents(...))`, both from `mcp.types`, carries the file with its URI and MIME type as the first message; the request that refers to it follows as plain text.
+* Embedding, rather than pasting the guide into the f-string, lets the client show it as an attachment and reopen `style://python` later, and the model receives the file verbatim. For a binary file use `BlobResourceContents` with a base64 `blob`.
+
+Rendered, the first message's `content` is a `resource` block:
+
+```json
+{"type": "resource", "resource": {"uri": "style://python", "mimeType": "text/markdown", "text": "* Prefer early returns.\n..."}}
+```
+
+### Attaching an image
+
+```python title="server.py" hl_lines="4 15"
+# docs_src/prompts/tutorial005.py
+from pathlib import Path
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Image, Message, UserMessage
+
+mcp = MCPServer("Code Helper")
+
+DIAGRAM_FILE = Path(__file__).parent / "architecture.png"  # or the path to your file on disk
+
+
+@mcp.prompt()
+def explain_component(component: str) -> list[Message]:
+    """Explain one component using the architecture diagram."""
+    return [
+        UserMessage(Image(path=DIAGRAM_FILE)),
+        UserMessage(f"Where does {component} sit in this architecture, and what does it talk to?"),
+    ]
+```
+
+* `Image` is the helper from **[Images, audio & icons](https://py.sdk.modelcontextprotocol.io/servers/media/index.md)**. `UserMessage` converts it to an `ImageContent` block (the file base64-encoded, MIME type guessed from `.png`) when the prompt renders; `Audio` becomes an `AudioContent` the same way.
+* Put any PNG named `architecture.png` beside `server.py`. Prompt arguments are strings, so the picture always comes from the server; `component` only supplies the words.
+
+```json
+{"type": "image", "data": "iVBORw0KGgoAAAANSUhEUg...", "mimeType": "image/png"}
+```
+
+## Changing the list at runtime
+
+Prompts can be added while clients are connected, for example to let a user save an instruction as a menu entry of their own. Register the prompt, then notify:
+
+```python title="server.py" hl_lines="5 23-27"
+# docs_src/prompts/tutorial006.py
+from contextlib import suppress
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+from mcp.server.mcpserver.prompts import Prompt
+
+mcp = MCPServer("Code Helper")
+
+
+@mcp.prompt()
+def review_code(code: str) -> str:
+    """Review a piece of code."""
+    return f"Please review this code:\n\n{code}"
+
+
+@mcp.tool()
+async def save_template(name: str, instruction: str, ctx: Context) -> str:
+    """Save an instruction as a prompt the user can pick from the menu."""
+
+    def template(code: str) -> str:
+        return f"{instruction}\n\n{code}"
+
+    with suppress(ValueError):  # replace an existing entry of the same name
+        mcp.remove_prompt(name)
+    mcp.add_prompt(Prompt.from_function(template, name=name, description=instruction))
+    await ctx.notify_prompts_changed()
+    await ctx.session.send_prompt_list_changed()
+    return f"Saved '{name}' to the prompt menu."
+```
+
+* `mcp.add_prompt(Prompt.from_function(fn, name=..., description=...))` registers a function exactly as `@mcp.prompt()` would, and `mcp.remove_prompt(name)` is the reverse. `add_prompt` keeps an existing entry of the same name rather than overwrite it, so the tool removes any old one first to make saving a replace. `prompts/list` reflects the change immediately.
+* `await ctx.notify_prompts_changed()` sends `notifications/prompts/list_changed` to every `2026-07-28` client listening on a `subscriptions/listen` stream (**[Subscriptions](https://py.sdk.modelcontextprotocol.io/handlers/subscriptions/index.md)**). `await ctx.session.send_prompt_list_changed()` sends it to the calling client when that client is pre-2026 (**[Serving legacy clients](https://py.sdk.modelcontextprotocol.io/run/legacy-clients/index.md)**). Call both; each does nothing when there is nobody to tell.
+* A client that receives the notification calls `prompts/list` again. In the Python `Client` that is `async with client.listen(prompts_list_changed=True) as sub:`, which yields a `PromptsListChanged` event.
+
+## Recap
+
+* `@mcp.prompt()` on a function makes it a prompt. Name from the function, description from the docstring.
+* Prompts are **user-controlled**: the client lists them, the user picks one and fills in the arguments.
+* Arguments are a flat list of named strings (no schema). A parameter with a default is optional.
+* Return a `str` and it becomes one user message. Return a list of `UserMessage` / `AssistantMessage` to seed a multi-turn conversation.
+* `title=` and `Field(description=...)` are what a client puts in its UI.
+* A missing required argument fails the whole request. There is no per-prompt error result.
+* Wrap an `EmbeddedResource` or an `Image` in a `UserMessage` to attach a document or a picture.
+* Add or remove prompts at runtime with `mcp.add_prompt(...)` / `mcp.remove_prompt(...)`, then `await ctx.notify_prompts_changed()` and `await ctx.session.send_prompt_list_changed()`.
+
+Server-side autocomplete for a prompt's (or a resource template's) arguments is **[Completions](https://py.sdk.modelcontextprotocol.io/servers/completions/index.md)**.
+
+# Completions
+
+Source: https://py.sdk.modelcontextprotocol.io/servers/completions/
+
+A client building a UI on top of your server wants to autocomplete argument values as the user types: language names, repository names, file paths.
+
+**Completions** are how your server supplies those suggestions.
+
+## Something worth completing
+
+Completions apply to exactly two things: the arguments of a **prompt** and the parameters of a **resource template**. So start with a server that has one of each:
+
+```python title="server.py" hl_lines="6 12"
+# docs_src/completions/tutorial001.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("GitHub Explorer")
+
+
+@mcp.resource("github://repos/{owner}/{repo}")
+def github_repo(owner: str, repo: str) -> str:
+    """A GitHub repository."""
+    return f"Repository: {owner}/{repo}"
+
+
+@mcp.prompt()
+def review_code(language: str, code: str) -> str:
+    """Review a snippet of code."""
+    return f"Review this {language} code:\n{code}"
+```
+
+Nothing here is about completions yet.
+
+* `review_code` takes a `language`. A user shouldn't have to guess which spellings you accept.
+* `github_repo` takes an `owner` and a `repo`. Free-text boxes for both make a bad form.
+
+## The completion handler
+
+Add **one** function decorated with `@mcp.completion()`:
+
+```python title="server.py" hl_lines="21-29"
+# docs_src/completions/tutorial002.py
+from mcp.server import MCPServer
+from mcp.types import Completion, CompletionArgument, CompletionContext, PromptReference, ResourceTemplateReference
+
+mcp = MCPServer("GitHub Explorer")
+
+LANGUAGES = ["go", "javascript", "python", "rust", "typescript"]
+
+
+@mcp.resource("github://repos/{owner}/{repo}")
+def github_repo(owner: str, repo: str) -> str:
+    """A GitHub repository."""
+    return f"Repository: {owner}/{repo}"
+
+
+@mcp.prompt()
+def review_code(language: str, code: str) -> str:
+    """Review a snippet of code."""
+    return f"Review this {language} code:\n{code}"
+
+
+@mcp.completion()
+async def handle_completion(
+    ref: PromptReference | ResourceTemplateReference,
+    argument: CompletionArgument,
+    context: CompletionContext | None,
+) -> Completion | None:
+    if isinstance(ref, PromptReference) and argument.name == "language":
+        return Completion(values=[lang for lang in LANGUAGES if lang.startswith(argument.value)])
+    return None
+```
+
+* There is one handler per server. Every completion request lands here, and you branch on what's being completed.
+* It must be `async def`: the SDK awaits it.
+* It receives three arguments:
+  * `ref`: *which* prompt or resource template, as a `PromptReference` or a `ResourceTemplateReference`. `isinstance` is how you tell them apart.
+  * `argument`: `argument.name` is the argument being completed, `argument.value` is what the user has typed so far.
+  * `context`: the arguments already resolved. Ignore it for now.
+* You return a `Completion(values=[...])`, or `None` when you have nothing to offer.
+
+!!! tip
+    `argument.value` is the prefix the user has typed. The SDK does **not** filter for you: whatever
+    you put in `values` is what the UI shows. The `startswith` is yours to write.
+
+### Try it
+
+Drive it with the in-memory `Client` from **[Testing](https://py.sdk.modelcontextprotocol.io/get-started/testing/index.md)**. Call
+`client.complete()` with `ref=PromptReference(name="review_code")` and
+`argument={"name": "language", "value": "py"}`:
+
+```python
+result.completion.values  # ['python']
+```
+
+* `ref` is the same reference type your handler receives.
+* `argument` is a plain dict with exactly two keys, `name` and `value`.
+
+Send an empty `value` and you get the whole list back. `lang.startswith("")` is true for every language:
+
+```python
+result.completion.values  # ['go', 'javascript', 'python', 'rust', 'typescript']
+```
+
+Ask about `code` (an argument your handler doesn't recognise) and it returns `None`, which the SDK turns into an empty list:
+
+```python
+result.completion.values  # []
+```
+
+`None` means *"no suggestions"*, never an error. A UI falls back to a plain text box.
+
+## A capability you never declared
+
+Registering the handler is the declaration. Connect a client and look:
+
+```python
+client.server_capabilities.completions  # CompletionsCapability()
+```
+
+You didn't list `completions` anywhere. The SDK saw the handler and declared the capability for you. Every *optional* capability works this way: the handler is the declaration. (The three primitives are not optional: `MCPServer` always declares those, handlers or not.)
+
+!!! check
+    Go back to the first `server.py` (the one with no handler) and ask it anyway. The call fails
+    with a JSON-RPC error:
+
+    ```text
+    Method not found
+    ```
+
+    And `client.server_capabilities.completions` is `None`. That's the point of the capability: a
+    well-behaved client checks it and never sends the request you can't answer.
+
+## Dependent arguments
+
+`github://repos/{owner}/{repo}` has two parameters, and the useful values for `repo` depend on which `owner` was picked first.
+
+That's what `context` is for. It carries the arguments the user has **already resolved**:
+
+```python title="server.py" hl_lines="8-11 34-38"
+# docs_src/completions/tutorial003.py
+from mcp.server import MCPServer
+from mcp.types import Completion, CompletionArgument, CompletionContext, PromptReference, ResourceTemplateReference
+
+mcp = MCPServer("GitHub Explorer")
+
+LANGUAGES = ["go", "javascript", "python", "rust", "typescript"]
+
+REPOS_BY_OWNER = {
+    "modelcontextprotocol": ["python-sdk", "typescript-sdk", "inspector"],
+    "pydantic": ["pydantic", "pydantic-ai", "logfire"],
+}
+
+
+@mcp.resource("github://repos/{owner}/{repo}")
+def github_repo(owner: str, repo: str) -> str:
+    """A GitHub repository."""
+    return f"Repository: {owner}/{repo}"
+
+
+@mcp.prompt()
+def review_code(language: str, code: str) -> str:
+    """Review a snippet of code."""
+    return f"Review this {language} code:\n{code}"
+
+
+@mcp.completion()
+async def handle_completion(
+    ref: PromptReference | ResourceTemplateReference,
+    argument: CompletionArgument,
+    context: CompletionContext | None,
+) -> Completion | None:
+    if isinstance(ref, PromptReference) and argument.name == "language":
+        return Completion(values=[lang for lang in LANGUAGES if lang.startswith(argument.value)])
+    if isinstance(ref, ResourceTemplateReference) and argument.name == "repo":
+        if context is None or context.arguments is None:
+            return None
+        repos = REPOS_BY_OWNER.get(context.arguments.get("owner", ""), [])
+        return Completion(values=[repo for repo in repos if repo.startswith(argument.value)])
+    return None
+```
+
+* The new branch fires for the template's `repo` parameter.
+* `context.arguments` is a `dict[str, str] | None` of the values picked so far (here, `owner`).
+* No `owner` yet means no sensible suggestions, so the handler returns `None`.
+
+The client sends those resolved values with `context_arguments=`. This time `ref` is a
+`ResourceTemplateReference(uri="github://repos/{owner}/{repo}")`. Ask for `repo` with an
+empty `value` and pass `context_arguments={"owner": "modelcontextprotocol"}`:
+
+```python
+result.completion.values  # ['python-sdk', 'typescript-sdk', 'inspector']
+```
+
+Drop `context_arguments=` and the same call returns `[]`. The handler can't know which repos to offer until it knows the owner.
+
+!!! info
+    `Completion` also takes `total=` and `has_more=`. Set them when `values` is a slice of a longer
+    list, so a UI can show *"and 200 more"*. Most handlers never need them.
+
+## Recap
+
+* Completions are suggestions for **prompt arguments** and **resource template parameters**. Nothing else.
+* `@mcp.completion()` registers the one handler. It's `async def (ref, argument, context) -> Completion | None`.
+* Branch on `isinstance(ref, ...)` and on `argument.name`. Filter by `argument.value` yourself.
+* `None` becomes an empty list. It is never an error.
+* `context.arguments` holds the already-resolved values; the client supplies them as `context_arguments=`.
+* The `completions` capability appears the moment you register the handler. Without it, the request is `Method not found`.
+
+Suggestions help while the user is still *filling in* a prompt or template; to ask them a question in the *middle* of a tool call, you want **[Elicitation](https://py.sdk.modelcontextprotocol.io/handlers/elicitation/index.md)**. Everything a tool can return besides text is **[Images, audio & icons](https://py.sdk.modelcontextprotocol.io/servers/media/index.md)**.
+
+# Images, audio & icons
+
+Source: https://py.sdk.modelcontextprotocol.io/servers/media/
+
+Text is not the only thing a tool can return.
+
+The SDK ships two helpers for binary results (**`Image`** and **`Audio`**) and an **`Icon`** type for giving your server, tools, resources, and prompts a face in the client's UI.
+
+## Returning an image
+
+Annotate the return type as `Image`, point it at a file, and return it:
+
+```python title="server.py" hl_lines="8 12 14"
+# docs_src/media/tutorial001.py
+from pathlib import Path
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Image
+
+mcp = MCPServer("Brand kit")
+
+LOGO_FILE = Path(__file__).parent / "logo.png"  # or the path to your file on disk
+
+
+@mcp.tool()
+def logo() -> Image:
+    """The brand logo as a PNG."""
+    return Image(path=LOGO_FILE)
+```
+
+* `Image` takes exactly one of `path` (a file to read) or `data` (raw bytes).
+* The MIME type the client sees is guessed from the suffix: `logo.png` is announced as `image/png`.
+* Nothing here is special about logos. Any PNG next to `server.py` works: a chart your code rendered, a diagram, a photo.
+
+`Image` is an SDK convenience, not a protocol type. On the wire your return value becomes an **`ImageContent`** block (the file's bytes base64-encoded, plus the MIME type):
+
+```python
+result.content             # [ImageContent(type="image", data="iVBORw0KGgoAAAANSUhEUg...", mime_type="image/png")]
+result.structured_content  # None
+```
+
+Two things to notice:
+
+* `data` is base64. You never touched the bytes; the SDK read the file and did the encoding.
+* `structured_content` is `None`. An `Image` is content for the model to look at, not data for the application to parse: there is no output schema. (Contrast **[Structured Output](https://py.sdk.modelcontextprotocol.io/servers/structured-output/index.md)**, where the return annotation *is* the schema.)
+
+!!! info
+    `ImageContent` and `AudioContent` live in `mcp.types`, right next to the `TextContent`
+    that a plain `str` result becomes (**[Tools](https://py.sdk.modelcontextprotocol.io/servers/tools/index.md)**). A tool result is a list of content blocks; `Image` and `Audio` are
+    the shortest way to produce the two binary kinds.
+
+### Try it
+
+Drop any PNG next to `server.py`, name it `logo.png`, and run:
+
+```console
+uv run mcp dev server.py
+```
+
+Open the **Tools** tab and call `logo`. The result is not a string: it is an `image` content block, and the Inspector renders your picture. Everything between the file on disk and the pixels on screen was the SDK.
+
+## Returning audio
+
+`Audio` is the same shape. Keep `logo.png` where it was, and put any WAV beside it as `chime.wav`:
+
+```python title="server.py" hl_lines="18-21"
+# docs_src/media/tutorial002.py
+from pathlib import Path
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Audio, Image
+
+mcp = MCPServer("Brand kit")
+
+LOGO_FILE = Path(__file__).parent / "logo.png"
+CHIME_FILE = Path(__file__).parent / "chime.wav"
+
+
+@mcp.tool()
+def logo() -> Image:
+    """The brand logo as a PNG."""
+    return Image(path=LOGO_FILE)
+
+
+@mcp.tool()
+def chime() -> Audio:
+    """The notification chime as a WAV."""
+    return Audio(path=CHIME_FILE)
+```
+
+The result is an **`AudioContent`** block:
+
+```python
+result.content             # [AudioContent(type="audio", data="UklGR...", mime_type="audio/wav")]
+result.structured_content  # None
+```
+
+Same deal: a file on disk in, base64 and a MIME type out, no output schema.
+
+## Bytes or a file
+
+Both helpers also accept `data=` (raw bytes) instead of `path=`. That is the mode for bytes that never came from a file of their own — a database column, an HTTP response, something Pillow just drew:
+
+```python title="server.py" hl_lines="14 15"
+# docs_src/media/tutorial003.py
+from pathlib import Path
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Image
+
+mcp = MCPServer("Brand kit")
+
+LOGO_FILE = Path(__file__).parent / "logo.png"
+
+
+@mcp.tool()
+def logo_from_bytes() -> Image:
+    """The brand logo as a PNG."""
+    png = LOGO_FILE.read_bytes()  # a database read, an HTTP response, Pillow output...
+    return Image(data=png, format="png")
+```
+
+With `path=` there is nothing to declare: the file is read when the result is built, and the MIME type is guessed from the suffix:
+
+* `Image`: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`.
+* `Audio`: `.wav`, `.mp3`, `.ogg`, `.flac`, `.aac`, `.m4a`.
+
+A suffix it doesn't recognise falls back to `application/octet-stream`.
+
+!!! check
+    With `data=` there is no filename, so there is nothing to guess from. Forget `format=` and
+    the SDK falls back to a default: `image/png` for images, `audio/wav` for audio. Build an
+    `Audio` from MP3 bytes that way and the client is told `mime_type="audio/wav"`, then
+    faithfully fails to decode it. When you pass `data=`, pass `format=`.
+
+## Embedding a resource
+
+A tool can also return a document: some text or bytes together with the URI it lives at and a MIME type. That is an **`EmbeddedResource`**, another kind of content block. Unlike a plain `str` it tells the client what the content is, so the client can show it as an attachment or recognise a resource it already knows.
+
+```python title="server.py" hl_lines="7 14 16-18"
+# docs_src/media/tutorial005.py
+from mcp.server import MCPServer
+from mcp.types import EmbeddedResource, TextResourceContents
+
+mcp = MCPServer("Brand kit")
+
+
+@mcp.resource("brand://guidelines", mime_type="text/markdown")
+def guidelines() -> str:
+    """How to use the brand assets."""
+    return "# Brand guidelines\n\nUse the primary colour for calls to action.\n"
+
+
+@mcp.tool()
+def brand_guidelines() -> EmbeddedResource:
+    """The brand guidelines as a Markdown document."""
+    return EmbeddedResource(
+        resource=TextResourceContents(uri="brand://guidelines", mime_type="text/markdown", text=guidelines())
+    )
+```
+
+* `brand://guidelines` is an ordinary resource (**[Resources](https://py.sdk.modelcontextprotocol.io/servers/resources/index.md)** covers those). The tool hands the same document to the model on request, and calling `guidelines()` directly keeps one source of truth.
+* `EmbeddedResource` and `TextResourceContents` come from `mcp.types`. There is no helper as there is for images: the block you build goes into the result untouched, and there is no `structured_content`.
+* Use the URI the resource is registered under, so a client can tell that the attachment and `brand://guidelines` are the same document. Any URI is legal, registered or not.
+
+```python
+result.content  # [EmbeddedResource(type="resource", resource=TextResourceContents(uri="brand://guidelines", mime_type="text/markdown", text="# Brand guidelines\n\n..."))]
+```
+
+For binary content, use `BlobResourceContents(uri=..., mime_type=..., blob=...)` with the bytes base64-encoded into `blob`, in place of `TextResourceContents`. To send only a pointer the client can `resources/read` later, return a `ResourceLink(name=..., uri=...)` instead; it is a content block too.
+
+## Icons
+
+An `Icon` is metadata, not content. It doesn't carry the image; it points at one with a URI, and a client may fetch it and show it next to your server's name, a tool, a resource, or a prompt.
+
+```python title="server.py" hl_lines="4-5 7 10 16"
+# docs_src/media/tutorial004.py
+from mcp.server import MCPServer
+from mcp.types import Icon
+
+LOGO = Icon(src="https://example.com/brand-kit.png", mime_type="image/png", sizes=["48x48"])
+PALETTE = Icon(src="https://example.com/palette.svg", mime_type="image/svg+xml", sizes=["any"])
+
+mcp = MCPServer("Brand kit", icons=[LOGO])
+
+
+@mcp.tool(icons=[PALETTE])
+def palette() -> list[str]:
+    """The brand colour palette as hex codes."""
+    return ["#1d4ed8", "#f59e0b", "#10b981"]
+
+
+@mcp.resource("brand://guidelines", icons=[LOGO])
+def guidelines() -> str:
+    """How to use the brand assets."""
+    return "Use the primary colour for calls to action."
+```
+
+* `src` is a URI the client can resolve: `https:`, or a `data:` URI if you want the icon embedded with no extra fetch.
+* `mime_type` and `sizes` (`"48x48"`, or `"any"` for a scalable format) let the client pick the right one when you offer several.
+* `theme="light"` or `theme="dark"` marks an icon for one colour scheme.
+
+The same `icons=[...]` keyword is accepted by `MCPServer(...)`, `@mcp.tool()`, `@mcp.resource()`, and `@mcp.prompt()`.
+
+### Where a client sees them
+
+Icons travel with whatever they decorate. The server's arrive when the client connects, on `client.server_info` (optional on 2026-era connections, so narrow it first):
+
+```python
+assert client.server_info is not None  # python-sdk servers identify themselves by default
+client.server_info.icons  # [Icon(src="https://example.com/brand-kit.png", mime_type="image/png", sizes=["48x48"])]
+```
+
+A tool's icons are on the `Tool` object from `tools/list`, a resource's on the `Resource` from `resources/list`, a prompt's on the `Prompt` from `prompts/list`. The field is always called `icons`.
+
+## Recap
+
+* Return an `Image` or `Audio` from a tool and the client receives an `ImageContent` / `AudioContent` block: your bytes base64-encoded, with a MIME type.
+* Build one from a `path=` and let the suffix decide the MIME type, or from in-memory `data=` plus an explicit `format=`.
+* Return an `EmbeddedResource` to put a document (text or a base64 blob, with its URI and MIME type) in the result, or a `ResourceLink` to send just the pointer.
+* Media results carry no `structured_content` and no output schema.
+* An `Icon` is a pointer: a `src` URI plus optional `mime_type`, `sizes`, and `theme`.
+* `icons=[...]` works on the server, on tools, on resources, and on prompts, and clients find them on the matching objects.
+
+That is everything a tool can put *into* a result. What happens when a tool *fails* (and who should find out) is **[Handling errors](https://py.sdk.modelcontextprotocol.io/servers/handling-errors/index.md)**.
+
+# Handling errors
+
+Source: https://py.sdk.modelcontextprotocol.io/servers/handling-errors/
+
+A tool can fail in three ways, and the SDK treats each differently.
+
+Raise `ToolError` and the **model** sees your message. Raise `MCPError` and the **protocol** sees it. Raise anything else and it is a crash: the model learns only that the call failed, and your log gets the traceback.
+
+This page is about choosing.
+
+## An error the model can fix
+
+Take a tool that looks something up, and let the lookup miss:
+
+```python title="server.py" hl_lines="2 12-13"
+# docs_src/handling_errors/tutorial001.py
+from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+
+mcp = MCPServer("Bookshop")
+
+CATALOG = {"Dune": "Frank Herbert", "Neuromancer": "William Gibson"}
+
+
+@mcp.tool()
+def get_author(title: str) -> str:
+    """Look up the author of a book in the catalog."""
+    if title not in CATALOG:
+        raise ToolError(f"No book titled {title!r} in the catalog.")
+    return CATALOG[title]
+```
+
+`ToolError`, from `mcp.server.mcpserver.exceptions`, is how a tool tells the model that something went wrong.
+
+Call it with a title that isn't in the catalog and look at the result:
+
+```python
+result.is_error            # True
+result.content             # [TextContent(text="Error executing tool get_author: No book titled 'Nothing' in the catalog.")]
+result.structured_content  # None
+```
+
+* The request **succeeded**. There is a result; nothing was raised at the caller.
+* `is_error` is `True`, and your message (prefixed with the tool name) is in `content`, exactly where the model reads.
+* `structured_content` is `None`. A failed call has no return value to structure.
+
+This is a **tool error**, and it is almost always what you want.
+
+The model is the one calling your tool. It picked the arguments. So a tool error is a turn in the conversation: the model reads *"No book titled 'Nothing' in the catalog."*, realises it guessed the title wrong, and calls again with a better one. You wrote one `raise` and got a self-correcting agent.
+
+On the server, a `ToolError` is one `INFO` line in the log, with no traceback. You saw it coming, so there is nothing to investigate.
+
+!!! tip
+    Never `return` an error message from a tool. A returned string has `is_error=False`, so to the
+    model (and to every client UI) it looks like the tool worked and that string was the answer.
+    `raise`. The flag is the signal.
+
+## An error the model cannot fix
+
+Now swap `ToolError` for `MCPError`.
+
+```python title="server.py" hl_lines="1 3 14"
+# docs_src/handling_errors/tutorial002.py
+from mcp import MCPError
+from mcp.server import MCPServer
+from mcp.types import INVALID_PARAMS
+
+mcp = MCPServer("Bookshop")
+
+CATALOG = {"Dune": "Frank Herbert", "Neuromancer": "William Gibson"}
+
+
+@mcp.tool()
+def get_author(title: str) -> str:
+    """Look up the author of a book in the catalog."""
+    if title not in CATALOG:
+        raise MCPError(code=INVALID_PARAMS, message=f"No book titled {title!r} in the catalog.")
+    return CATALOG[title]
+```
+
+`MCPError` is the SDK's **protocol error**. It is the one exception the tool wrapper does *not* catch: it propagates, and the whole `tools/call` request fails with a JSON-RPC error instead of a result.
+
+```json
+{
+  "code": -32602,
+  "message": "No book titled 'Nothing' in the catalog."
+}
+```
+
+* There is **no result**. No `content`, no `is_error`: nothing for the model to read.
+* The **host** application gets the error instead, the same way it would if the tool didn't exist at all.
+* `code`, `message`, and `data` arrive intact. `INVALID_PARAMS` is `-32602`; `mcp.types` exports it and the other JSON-RPC error codes (`INVALID_REQUEST`, `INTERNAL_ERROR`, ...) as constants so you never type a magic number.
+
+!!! check
+    Same lookup, same miss, but now the call *raises* on the client side instead of returning:
+
+    ```text
+    mcp.shared.exceptions.MCPError: No book titled 'Nothing' in the catalog.
+    ```
+
+    The first version handed the model a sentence it could react to. This one hands it nothing.
+    For `get_author` that is strictly worse, which is the point of the next section.
+
+## Which one to raise
+
+The two paths answer two different questions.
+
+* **Raise `ToolError`** for a failure of *execution*: the thing your tool tried to do didn't work. The model chose the call, so the model should see the consequence and get a chance to recover. A misspelled title, an upstream API that timed out, a row that doesn't exist: all tool errors.
+* **Raise `MCPError`** when the *request itself* should be rejected: the client is missing a capability your tool depends on, the server isn't in a state to serve anyone, the caller skipped a required step. No retry from the model fixes any of those, so there is nothing to gain from handing it the message.
+
+One question decides it: **could a smarter model have avoided this?** Yes -> `ToolError`. No -> `MCPError`.
+
+By that test, the second version of `get_author` made the wrong choice: a better title fixes it, so the model deserved to see the message. It's there to show you the mechanism, not to recommend it.
+
+!!! info
+    `MCPError` lives at `from mcp import MCPError` and takes `code`, `message`, and an optional
+    `data` payload. Whatever you put in them is what the client receives: the SDK forwards a raised
+    `MCPError` verbatim instead of sanitising it.
+
+## Any other exception
+
+Now take the check out and let the dictionary lookup fail on its own:
+
+```python title="server.py" hl_lines="11"
+# docs_src/handling_errors/tutorial004.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Bookshop")
+
+CATALOG = {"Dune": "Frank Herbert", "Neuromancer": "William Gibson"}
+
+
+@mcp.tool()
+def get_author(title: str) -> str:
+    """Look up the author of a book in the catalog."""
+    return CATALOG[title]
+```
+
+`CATALOG[title]` raises `KeyError`. You didn't plan for it, so the SDK treats it as a crash:
+
+```python
+result.is_error  # True
+result.content   # [TextContent(text="Error executing tool get_author")]
+```
+
+The call still returns `is_error=True`, so the model knows it failed and can move on. What it doesn't get is the exception's text: a `KeyError` from your code, or a stack of SQL from a driver three libraries down, may describe your server's internals, so it never leaves the server.
+
+You get it instead. The server logs the crash at `ERROR` with the full traceback, as `Tool 'get_author' raised an unexpected exception`. A production log at `WARNING` therefore stays quiet through every `ToolError` and speaks up the moment something is actually broken.
+
+## A resource that doesn't exist
+
+Resources draw the same line, and ship one named exception for the common case.
+
+```python title="server.py" hl_lines="2 13"
+# docs_src/handling_errors/tutorial003.py
+from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ResourceNotFoundError
+
+mcp = MCPServer("Bookshop")
+
+CATALOG = {"Dune": "Frank Herbert", "Neuromancer": "William Gibson"}
+
+
+@mcp.resource("books://{title}")
+def book(title: str) -> str:
+    """The catalog entry for one book."""
+    if title not in CATALOG:
+        raise ResourceNotFoundError(f"No book titled {title!r} in the catalog.")
+    return f"{title} by {CATALOG[title]}"
+```
+
+`books://{title}` is a **template**. It matches *any* title, so "the URI is well-formed" and "the book exists" are two different questions, and only your function can answer the second one.
+
+When it can't, raise `ResourceNotFoundError`. The SDK turns it into the protocol error the spec assigns to a missing resource: `-32602` with the requested URI in `data`, so the client knows *which* read failed.
+
+```json
+{
+  "code": -32602,
+  "message": "No book titled 'Nothing' in the catalog.",
+  "data": {"uri": "books://Nothing"}
+}
+```
+
+Notice there is no `is_error=True` half-result here. A resource read either returns contents or fails: resources have only the protocol path. `ResourceError` is the same thing for a failure that isn't "not found" (`-32603`, your message), and both are one `INFO` line in your log. Any other exception bar `MCPError` is a crash: the client gets `-32603` naming only the URI, and the traceback goes to your log at `ERROR`. Templates and everything else about resources live in **[Resources](https://py.sdk.modelcontextprotocol.io/servers/resources/index.md)**.
+
+## Errors you never raise
+
+A bad argument never reaches your function.
+
+Send `get_author` a `title` that isn't a string and the SDK rejects it against the input schema **before** calling you, as the same kind of `is_error=True` tool error the model can read and correct. **[Tools](https://py.sdk.modelcontextprotocol.io/servers/tools/index.md)** shows the same rejection with a `Field(le=50)` constraint.
+
+It means a whole class of `raise` statements you don't write: don't re-validate your own type hints.
+
+!!! info
+    Everything a **client** sees on this page, the in-memory `Client` you'll write tests with
+    sees too. Even `raise_exceptions=True` doesn't hand a failing
+    tool's exception back to the caller: by the time that flag could act, your exception is already
+    the `is_error=True` result. Assert on the result. If you need the traceback of a crash, it is in
+    the server's log, and pytest's `caplog` captures it. **[Testing](https://py.sdk.modelcontextprotocol.io/get-started/testing/index.md)** covers the pattern.
+
+## Recap
+
+* Raise **`ToolError`** in a tool -> the call returns `is_error=True` with your message in `content`. The model reads it and can retry.
+* Raise **`MCPError`** -> the call itself fails with a JSON-RPC error. The model sees nothing; the host deals with it. `code`, `message`, and `data` survive intact.
+* The deciding question: *could a smarter model have avoided this?* Yes -> `ToolError`. No -> `MCPError`.
+* Any **other exception** is a crash -> `is_error=True` with only `Error executing tool <name>` for the model, and an `ERROR` record with the traceback for you.
+* `ResourceNotFoundError` from a resource handler -> the protocol's `-32602`, with the URI in `data`.
+* Bad arguments are rejected against the schema before your function runs; you don't `raise` for those.
+* Imports: `from mcp import MCPError`, `from mcp.server.mcpserver.exceptions import ToolError, ResourceError, ResourceNotFoundError`, and the error-code constants from `mcp.types`.
+
+Errors handled. That is everything a server *exposes*. What every handler can read, and do back to the client while it runs, is the next section: **[Inside your handler](https://py.sdk.modelcontextprotocol.io/handlers/index.md)**.
+
+The exact text of the SDK errors you are most likely to meet, what each means, and the one-move fix for each is **[Troubleshooting](https://py.sdk.modelcontextprotocol.io/troubleshooting/index.md)**.
+
+# Inside your handler
+
+Source: https://py.sdk.modelcontextprotocol.io/handlers/
+
+A handler's arguments come from the client. Everything *else* it can read, and
+everything it can do while it runs, is here.
+
+What it can read:
+
+* **[The Context](https://py.sdk.modelcontextprotocol.io/handlers/context/index.md)** is the one extra parameter any handler can
+  ask for: the live request, its headers, its session, and the progress and
+  change-notification verbs.
+* **[Dependencies](https://py.sdk.modelcontextprotocol.io/handlers/dependencies/index.md)** are parameters the model never sees,
+  filled in by your own functions with `Resolve`.
+* **[Lifespan](https://py.sdk.modelcontextprotocol.io/handlers/lifespan/index.md)** covers state your server builds once at
+  startup, and how a handler reaches it through the `Context`.
+
+What it can do while it runs:
+
+* Ask the user for more input with **[Elicitation](https://py.sdk.modelcontextprotocol.io/handlers/elicitation/index.md)**, and
+  **[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**, the 2026-07-28
+  pattern that carries it.
+* Ask the client for an LLM completion or its workspace folders with
+  **[Sampling and roots](https://py.sdk.modelcontextprotocol.io/handlers/sampling-and-roots/index.md)**, deprecated but still
+  served.
+* Report **[Progress](https://py.sdk.modelcontextprotocol.io/handlers/progress/index.md)** on something slow.
+* Write logs (to standard error, for whoever operates the server) with
+  **[Logging](https://py.sdk.modelcontextprotocol.io/handlers/logging/index.md)**.
+* Tell subscribed clients that something changed with
+  **[Subscriptions](https://py.sdk.modelcontextprotocol.io/handlers/subscriptions/index.md)**.
+
+If you haven't registered a handler yet, start with
+**[Tools](https://py.sdk.modelcontextprotocol.io/servers/tools/index.md)**. Every page here assumes you have one.
+
+# The Context
+
+Source: https://py.sdk.modelcontextprotocol.io/handlers/context/
+
+A tool's arguments come from the model. Everything else (the request you are serving, the server you live in, a way to talk back to the client) comes from one object: the **`Context`**.
+
+You don't construct it and you don't configure it. You ask for it.
+
+## Ask for it
+
+Add a parameter annotated with `Context` to any tool:
+
+```python title="server.py" hl_lines="2 8"
+# docs_src/context/tutorial001.py
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.tool()
+def search_books(query: str, ctx: Context) -> str:
+    """Search the catalog by title or author."""
+    return f"[request {ctx.request_id}] Found 3 books matching {query!r}."
+```
+
+* The SDK builds a fresh `Context` for every request and passes it in.
+* The parameter **name doesn't matter**. `ctx`, `context`, `c`: the SDK finds it by its annotation.
+* Resources and prompts can declare one too, the same way.
+* `ctx.request_id` is the id of the request your function is serving right now.
+
+!!! info
+    If you've used FastAPI, you've seen this move: declare a parameter with the framework's own type
+    (`Request` there, `Context` here) and the framework supplies it. Nothing to register, nothing to
+    configure: the type annotation is the whole mechanism.
+
+### Invisible to the model
+
+This is the part to internalise. Here is the input schema `tools/list` reports for `search_books`:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {"title": "Query", "type": "string"}
+  },
+  "required": ["query"],
+  "title": "search_booksArguments"
+}
+```
+
+One property. `ctx` is not an argument: it never appears in the schema, the model is never told about it, and no client can fill it in. It's a contract between you and the SDK, invisible on the wire.
+
+### Try it
+
+Run the server with the MCP Inspector:
+
+```console
+uv run mcp dev server.py
+```
+
+The form for `search_books` has a single `query` field. Call it with `dune`:
+
+```text
+[request 3] Found 3 books matching 'dune'.
+```
+
+The number is whichever request this happened to be. Call the tool again and it changes: every request gets its own `Context`.
+
+## What it gives you
+
+The injected object is small. Besides `request_id`:
+
+* `await ctx.read_resource(uri)`: read one of the server's **own** resources from inside a tool. The next section.
+* `await ctx.report_progress(progress, total, message)`: stream progress back to the caller during a long call. The whole story is in **[Progress](https://py.sdk.modelcontextprotocol.io/handlers/progress/index.md)**.
+* `await ctx.elicit(message, schema)` and `await ctx.elicit_url(...)`: pause the tool and ask the user a question. That's **[Elicitation](https://py.sdk.modelcontextprotocol.io/handlers/elicitation/index.md)**.
+* `ctx.session`: the server's side of the conversation with this client. Notifications you send to the client live here; the last section uses it.
+* `ctx.headers`: the request headers the transport carried, or `None` on stdio. Read a custom header with `(ctx.headers or {}).get("x-...")`. Headers are client-supplied input - fine for a locale or a feature flag, never an identity.
+* `ctx.request_context`: the raw per-request record. The field you'll reach for is `lifespan_context`, the object your startup code yielded (see **[Lifespan](https://py.sdk.modelcontextprotocol.io/handlers/lifespan/index.md)**).
+
+Logging is deliberately not on that list. A server logs with Python's `logging` module, like any other Python program. **[Logging](https://py.sdk.modelcontextprotocol.io/handlers/logging/index.md)** is the short page on why.
+
+!!! tip
+    Injection only happens for the function you registered. A helper that your tool calls doesn't get
+    its own `Context`; pass `ctx` down as an ordinary argument. There is no ambient
+    "current context" to fetch from somewhere else.
+
+## Read your own resources
+
+A server's resources aren't only for clients. A tool can read them too:
+
+```python title="server.py" hl_lines="16"
+# docs_src/context/tutorial002.py
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.resource("catalog://genres")
+def genres() -> str:
+    """The genres the catalog is organised into."""
+    return "fiction, non-fiction, poetry"
+
+
+@mcp.tool()
+async def describe_catalog(ctx: Context) -> str:
+    """Describe how the catalog is organised."""
+    [contents] = await ctx.read_resource("catalog://genres")
+    return f"The catalog is organised into: {contents.content}"
+```
+
+`ctx.read_resource` resolves the URI through the same registry that serves `resources/read`, so a tool gets what a client would get: an iterable of `ReadResourceContents`, one per content block. For this URI there is one:
+
+```python
+contents.content    # 'fiction, non-fiction, poetry'
+contents.mime_type  # 'text/plain'
+```
+
+* `content` is exactly what `genres()` returned. One source of truth: the client browses the resource, your tools consume it, nobody copies the string.
+* `describe_catalog`'s only parameter is the `Context`, so its input schema has **no properties at all**. The model calls it with `{}`.
+
+## Tell the client the list changed
+
+What a server offers is not fixed at import time. Register a tool at runtime, then tell the client:
+
+```python title="server.py" hl_lines="15-16"
+# docs_src/context/tutorial003.py
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+
+mcp = MCPServer("Bookshop")
+
+
+def recommend_book(genre: str) -> str:
+    """Recommend a book in the given genre."""
+    return f"In {genre}, try 'Dune'."
+
+
+@mcp.tool()
+async def enable_recommendations(ctx: Context) -> str:
+    """Switch on the recommendation tool."""
+    mcp.add_tool(recommend_book)
+    await ctx.session.send_tool_list_changed()
+    return "Recommendations are now available."
+```
+
+* `mcp.add_tool(recommend_book)` registers a plain function as a tool: name, description and schema derived exactly as `@mcp.tool()` would have.
+* `await ctx.session.send_tool_list_changed()` sends `notifications/tools/list_changed`. A client that receives it calls `tools/list` again and sees `recommend_book`.
+
+The siblings are `send_resource_list_changed()`, `send_prompt_list_changed()`, and `send_resource_updated(uri)` for a change to one specific resource.
+
+On a 2026-07-28 connection, clients receive change notifications only on a `subscriptions/listen` stream they opened, so the `send_*` methods above do not reach those streams. The `Context` publish methods deliver to every subscribed stream at once: `await ctx.notify_tools_changed()`, `await ctx.notify_prompts_changed()`, `await ctx.notify_resources_changed()`, and `await ctx.notify_resource_updated(uri)`. The whole story, including scaling out across replicas, is in **[Subscriptions](https://py.sdk.modelcontextprotocol.io/handlers/subscriptions/index.md)**.
+
+!!! check
+    Before anyone runs `enable_recommendations`, the tool you are promising does not exist. Call it
+    anyway and the result is an error the model can read:
+
+    ```text
+    Unknown tool: recommend_book
+    ```
+
+    Run `enable_recommendations`, and the very same call succeeds. The tool list is genuinely
+    dynamic: `tools/list` reflects whatever is registered *right now*.
+
+## Recap
+
+* Annotate a parameter with `Context` (in a tool, a resource, or a prompt) and the SDK injects it. The name is yours.
+* It is invisible to the model: the input schema only ever contains your real arguments.
+* `ctx.request_id` identifies the request; `ctx.request_context.lifespan_context` is what your startup yielded.
+* `await ctx.read_resource(uri)` lets a tool read the server's own resources.
+* `ctx.session` is the channel back to the client: `send_tool_list_changed()` and its siblings tell it to re-fetch a list you changed.
+* Progress reporting and elicitation also start at `Context`; each has its own page.
+
+Parameters the model never sees, filled by your own functions, are **[Dependencies](https://py.sdk.modelcontextprotocol.io/handlers/dependencies/index.md)**.
+
+# Dependencies
+
+Source: https://py.sdk.modelcontextprotocol.io/handlers/dependencies/
+
+A tool's arguments come from the model. Some values never should: a price looked up from your records, a confirmation only a person can give, anything the model could get wrong by inventing it.
+
+**Dependencies** are parameters filled by your own functions. You annotate the parameter, name the function, and the SDK calls it before your tool runs.
+
+## Declare one
+
+Wrap the parameter's type in `Annotated[...]` and add `Resolve(fn)`:
+
+```python title="server.py" hl_lines="18-19 23"
+# docs_src/dependencies/tutorial001.py
+from typing import Annotated
+
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Resolve
+
+mcp = MCPServer("Bookshop")
+
+INVENTORY = {"Dune": 7, "Neuromancer": 0}
+
+
+class Stock(BaseModel):
+    title: str
+    copies: int
+
+
+async def check_stock(title: str) -> Stock:
+    return Stock(title=title, copies=INVENTORY.get(title, 0))
+
+
+@mcp.tool()
+async def reserve_book(title: str, stock: Annotated[Stock, Resolve(check_stock)]) -> str:
+    """Reserve a copy of a book."""
+    if stock.copies == 0:
+        return f"{title!r} is out of stock."
+    return f"Reserved {title!r} ({stock.copies - 1} copies left)."
+```
+
+* `check_stock` is a **resolver**: a plain function the SDK runs before `reserve_book`, whose return value becomes the `stock` argument.
+* Its `title` parameter is the tool's own `title` argument, matched **by name**. The resolver sees exactly the validated value the tool body will see.
+* The tool body starts from a `Stock` that already exists. No lookup code in the tool, no "what if it's missing" preamble.
+
+!!! info
+    If you've used FastAPI, this is `Depends`. Same move, same reason: the function declares what
+    it needs, the framework supplies it, and the wiring lives in the type annotation.
+
+### Invisible to the model
+
+Here is the input schema `tools/list` reports for `reserve_book`:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "title": {"title": "Title", "type": "string"}
+  },
+  "required": ["title"],
+  "title": "reserve_bookArguments"
+}
+```
+
+One property. Like the `Context` in **[The Context](https://py.sdk.modelcontextprotocol.io/handlers/context/index.md)**, a resolved parameter is a contract between you and the SDK: `stock` is not in the schema, the model is never told about it, and a client that sends a `stock` value anyway is ignored. The resolver's value is the only one your tool can receive.
+
+That last part is the point. A parameter the model cannot supply is a parameter the model cannot get wrong.
+
+### Try it
+
+Run the server with the MCP Inspector:
+
+```console
+uv run mcp dev server.py
+```
+
+The form for `reserve_book` has a single `title` field. `stock` is nowhere on it. Call it with `Dune`:
+
+```text
+Reserved 'Dune' (6 copies left).
+```
+
+The tool body never looked anything up: `check_stock` ran first, and the `Stock` it returned arrived as an argument. Try `Neuromancer` and the same resolver hands the tool a zero.
+
+!!! tip
+    You could just call `check_stock(title)` in the tool body. Declare it as a dependency when the
+    value deserves more than a helper call: every tool that needs stock declares the same parameter,
+    and the SDK runs the resolver at most once per call, no matter how many declare it. The next
+    sections add the rest: resolvers that depend on each other, and resolvers that ask the user.
+
+## Dependencies of dependencies
+
+A resolver can declare its own dependencies, with the same annotation:
+
+```python title="server.py" hl_lines="22 29-30"
+# docs_src/dependencies/tutorial002.py
+from typing import Annotated
+
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Resolve
+
+mcp = MCPServer("Bookshop")
+
+INVENTORY = {"Dune": 7, "Neuromancer": 0}
+
+
+class Stock(BaseModel):
+    title: str
+    copies: int
+
+
+async def check_stock(title: str) -> Stock:
+    return Stock(title=title, copies=INVENTORY.get(title, 0))
+
+
+async def estimate_delivery(stock: Annotated[Stock, Resolve(check_stock)]) -> str:
+    return "tomorrow" if stock.copies > 0 else "in 2-3 weeks"
+
+
+@mcp.tool()
+async def order_book(
+    title: str,
+    stock: Annotated[Stock, Resolve(check_stock)],
+    delivery: Annotated[str, Resolve(estimate_delivery)],
+) -> str:
+    """Order a book from the shop."""
+    if stock.copies == 0:
+        return f"{title!r} is on backorder; it would arrive {delivery}."
+    return f"Ordered {title!r}; it arrives {delivery}."
+```
+
+* `estimate_delivery` depends on `check_stock`. The SDK runs the graph in order: stock first, then the estimate, then the tool.
+* Both `stock` and `delivery` ultimately need `check_stock`, but it runs **once per call**. One inventory lookup, two consumers.
+* There is nothing to register. The graph *is* the annotations.
+
+!!! check
+    Don't take once-per-call on faith. Put a `print` in `check_stock` and call `order_book` from the
+    Inspector: one line per call. Two consumers, one lookup.
+
+The SDK analyses the graph when the tool is registered, not when it is called. A parameter it can't classify - not a `Context`, not a `Resolve(...)`, not a tool argument's name - and a cycle of resolvers both raise `InvalidSignature` at startup. Your server fails before a client ever connects, with the offending parameter or resolver named in the error.
+
+A resolver's parameters resolve exactly like a tool's: another `Resolve(...)`, the tool's own arguments by name, or the `Context` - `ctx.headers`, the lifespan object, all of it.
+
+!!! warning
+    On HTTP transports the `Context` includes `ctx.headers`. Headers are **client-supplied input**,
+    like any tool argument: fine for a locale or a feature flag, never an identity. Who the caller
+    is comes from your authorization layer (**[Authorization](https://py.sdk.modelcontextprotocol.io/run/authorization/index.md)**), not from a header anyone can set.
+
+!!! tip
+    *Once per call* means exactly that: the next `tools/call` runs `check_stock` again. A resource
+    that should outlive a request - a database pool, an HTTP client - belongs in **[Lifespan](https://py.sdk.modelcontextprotocol.io/handlers/lifespan/index.md)**, and
+    a resolver can reach it through `ctx.request_context.lifespan_context`.
+
+## Ask when you must
+
+A resolver doesn't have to know the answer. It can return `Elicit(message, Model)` and the SDK asks the user - the **[Elicitation](https://py.sdk.modelcontextprotocol.io/handlers/elicitation/index.md)** machinery, run for you:
+
+```python title="server.py" hl_lines="26-32 39"
+# docs_src/dependencies/tutorial003.py
+from typing import Annotated
+
+from pydantic import BaseModel, Field
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Elicit, Resolve
+
+mcp = MCPServer("Bookshop")
+
+INVENTORY = {"Dune": 7, "Neuromancer": 0}
+
+
+class Stock(BaseModel):
+    title: str
+    copies: int
+
+
+class Backorder(BaseModel):
+    confirm: bool = Field(description="Order anyway and wait?")
+
+
+async def check_stock(title: str) -> Stock:
+    return Stock(title=title, copies=INVENTORY.get(title, 0))
+
+
+async def confirm_backorder(
+    title: str,
+    stock: Annotated[Stock, Resolve(check_stock)],
+) -> Backorder | Elicit[Backorder]:
+    if stock.copies > 0:
+        return Backorder(confirm=True)  # in stock: nothing to ask
+    return Elicit(f"{title!r} is out of stock (2-3 weeks). Order anyway?", Backorder)
+
+
+@mcp.tool()
+async def order_book(
+    title: str,
+    stock: Annotated[Stock, Resolve(check_stock)],
+    backorder: Annotated[Backorder, Resolve(confirm_backorder)],
+) -> str:
+    """Order a book from the shop."""
+    if not backorder.confirm:
+        return "No order placed."
+    if stock.copies == 0:
+        return f"Backordered {title!r}; it ships in 2-3 weeks."
+    return f"Ordered {title!r}."
+```
+
+* In stock: `confirm_backorder` returns a `Backorder` directly. **No question, no round-trip.** The user is only interrupted when their answer matters.
+* Out of stock: the SDK sends the elicitation, validates the answer against `Backorder`, and injects it. Your resolver never touches the protocol.
+* The tool reads `backorder.confirm` like any other argument. Answering **no** is still an answer: the elicitation is accepted with `confirm=False`, the tool runs, and no order is placed. Asking became a precondition, not plumbing in the tool body.
+
+And if the user won't answer at all - declines the question, or cancels it?
+
+!!! check
+    Run `order_book` for `Neuromancer` and decline the question. With the annotation written as
+    `Annotated[Backorder, Resolve(...)]` the tool body never runs; the call fails with an error
+    result the model can read:
+
+    ```text
+    Error executing tool order_book: Resolver for parameter 'backorder' could not resolve: elicitation was decline
+    ```
+
+That's the right default for a precondition: no answer, no order. When declining is an outcome your tool wants to handle - skip the backorder but still suggest another title - annotate `ElicitationResult[Backorder]` instead and the tool receives the full accept/decline/cancel outcome to branch on. **[Elicitation](https://py.sdk.modelcontextprotocol.io/handlers/elicitation/index.md)** shows that form, and everything else about asking: the schema rules, the three answers, the client's side of the conversation.
+
+!!! info
+    The framework picks the question's transport from the negotiated protocol version; the code
+    above is identical on both. On **2026-07-28** and later the question rides inside a
+    multi-round-trip `tools/call` - the server returns it, the client's `elicitation_callback`
+    answers it, and the `Client` retries the call for you (**[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**). On
+    **2025-11-25** and earlier it is a synchronous elicitation request mid-call. Each question is
+    asked exactly once per call - a guarantee about the question, not the resolver. In the
+    multi-round-trip form any resolver may run again whenever the call resumes after a question,
+    so code before a `return Elicit(...)` runs on each of those rounds; the recorded answer then
+    satisfies the repeated question without prompting the user again. A recorded answer is only
+    ever consulted when the resolver asks; a resolver that answers *without* asking, like
+    `check_stock`, always supplies its own computed value. Because each answer is matched back to
+    its question, an eliciting resolver must derive its question deterministically from the
+    tool's arguments and earlier answers. A per-call generated value (a `default_factory` id, a
+    timestamp) is re-derived on each round and must not appear in a question the answer is meant
+    to bind to. A question built from such volatile data makes every recorded answer look stale,
+    so the server re-asks it on every round until the client's round limit ends the call.
+
+## Ask the client, not the user
+
+Elicitation is one of the three questions a resolver can ask, and the multi-round-trip flow allows no others. The other two go to the **client** rather than the user: return `Sample(...)` to run an LLM call through the client (a `sampling/createMessage` request), or `ListRoots()` to fetch the client's current roots. Neither has an accept/decline outcome; the consumer annotates the result type directly, `CreateMessageResult` (`CreateMessageResultWithTools` when the request carries `tools` or `tool_choice`) or `ListRootsResult`:
+
+```python title="server.py" hl_lines="10-15 21"
+# docs_src/dependencies/tutorial004.py
+from typing import Annotated
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Resolve, Sample
+from mcp.types import CreateMessageResult, SamplingMessage, TextContent
+
+mcp = MCPServer("Bookshop")
+
+
+def suggest_title(genre: str) -> Sample:
+    prompt = f"Suggest one {genre} book title. Answer with the title only."
+    return Sample(
+        [SamplingMessage(role="user", content=TextContent(type="text", text=prompt))],
+        max_tokens=50,
+    )
+
+
+@mcp.tool()
+async def recommend_book(
+    genre: str,
+    suggestion: Annotated[CreateMessageResult, Resolve(suggest_title)],
+) -> str:
+    """Recommend a book in the given genre."""
+    title = suggestion.content.text if suggestion.content.type == "text" else "the classics"
+    return f"Today's {genre} pick: {title}"
+```
+
+* The framework routes these exactly like `Elicit`: inside the multi-round-trip `tools/call` on **2026-07-28**, over the standalone server->client request on **2025-11-25**. An undeclared capability refuses the call with a `-32021` protocol error (`sampling`, `roots`, form-mode `elicitation`; `sampling.tools` when the request carries `tools` or `tool_choice`).
+* Everything the info box above says about questions applies unchanged: a `Sample` request is matched to its recorded result by its exact rendering, so build it deterministically from the tool's arguments and earlier answers; the client then pays for the LLM call once per tool call, not once per round. The recorded result rides `request_state` for the rest of the call, so a very large completion makes every remaining round-trip heavier.
+* The standalone sampling and roots *features* are deprecated at 2026-07-28 (SEP-2577). New servers that need the client's model ask through this carrier; servers that don't should integrate with an LLM provider directly. `include_context` values other than `"none"` are themselves deprecated; avoid them.
+
+## Recap
+
+* `Annotated[T, Resolve(fn)]` on a tool parameter: the SDK runs `fn` and injects its return value.
+* A resolved parameter is invisible to the model and cannot be supplied by a client. Values the model must not invent - prices, identities, permissions - belong here.
+* A resolver's parameters are resolved the same way: the `Context`, another `Resolve(...)`, or a tool argument by name. The graph runs each resolver at most once per round, however many consumers it has; each question is asked exactly once, and any resolver may run again when a call resumes after a question.
+* Bad graphs fail at registration with `InvalidSignature`, not mid-call.
+* Return `Elicit(message, Model)` to ask the user, only when you have to. Unwrapped annotations abort on decline; `ElicitationResult[T]` lets the tool branch.
+* Return `Sample(...)` or `ListRoots()` to ask the client for an LLM completion or the roots list; the plain result is injected.
+
+The state your server builds once at startup, and how a handler reaches it, is the **[Lifespan](https://py.sdk.modelcontextprotocol.io/handlers/lifespan/index.md)** page.
+
+# Lifespan
+
+Source: https://py.sdk.modelcontextprotocol.io/handlers/lifespan/
+
+Most real servers hold something for their whole life: a database pool, an HTTP client, a loaded model.
+
+You don't want to build it on every call, and you do want to close it cleanly. That's what the **lifespan** is for.
+
+## A typed lifespan
+
+A lifespan is an `@asynccontextmanager` that receives the server and `yield`s **one object**. Whatever you yield is available to every handler for as long as the server runs.
+
+```python title="server.py" hl_lines="25-31 34 38 40"
+# docs_src/lifespan/tutorial001.py
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+
+
+class Database:
+    @classmethod
+    async def connect(cls) -> "Database":
+        return cls()
+
+    async def disconnect(self) -> None: ...
+
+    def query(self) -> int:
+        return 3
+
+
+@dataclass
+class AppContext:
+    db: Database
+
+
+@asynccontextmanager
+async def app_lifespan(server: MCPServer) -> AsyncIterator[AppContext]:
+    db = await Database.connect()
+    try:
+        yield AppContext(db=db)
+    finally:
+        await db.disconnect()
+
+
+mcp = MCPServer("Bookshop", lifespan=app_lifespan)
+
+
+@mcp.tool()
+def count_books(genre: str, ctx: Context[AppContext]) -> str:
+    """Count the books in a genre."""
+    db = ctx.request_context.lifespan_context.db
+    return f"{db.query()} books in {genre!r}."
+```
+
+Read it bottom-up:
+
+* `app_lifespan` connects the `Database` **before** the `yield` and disconnects it **after**, in a `finally`. That's startup and shutdown.
+* It yields an `AppContext`, a plain dataclass holding the things you set up. One field today, ten tomorrow.
+* `MCPServer("Bookshop", lifespan=app_lifespan)` is the whole wiring.
+* Inside the tool, the yielded object is `ctx.request_context.lifespan_context`.
+
+The lifespan runs **once**. It is entered when the server starts (before the first request) and exited when the server stops. Every request in between shares the same `AppContext`.
+
+!!! info
+    If you've written a FastAPI `lifespan`, you already know this. Same decorator, same `yield`, same `finally`.
+
+### What the model sees
+
+Nothing new. `ctx` is a **Context** parameter, so the SDK injects it and it never reaches the input schema:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "genre": {"title": "Genre", "type": "string"}
+  },
+  "required": ["genre"],
+  "title": "count_booksArguments"
+}
+```
+
+`genre` is the only argument the model can pass. The lifespan is your server's business.
+
+`@mcp.resource()` and `@mcp.prompt()` functions can take a `ctx` parameter too, written as a bare `Context` for a reason the next section gets to. Everything `ctx` carries is in **[The Context](https://py.sdk.modelcontextprotocol.io/handlers/context/index.md)**.
+
+### It really is typed
+
+Look at the annotation again: `ctx: Context[AppContext]`.
+
+That one type parameter is why `ctx.request_context.lifespan_context` **is** an `AppContext` to your type checker. `.db` autocompletes; `.dbb` is an error before you ever run the server.
+
+Write a bare `Context` instead and `lifespan_context` is typed as `dict[str, Any]`: the type checker has no way to know what your lifespan yielded. The object is still there at runtime; you've lost the help.
+
+!!! warning
+    `Context[AppContext]` is a **tool-only** spelling. Put it on an `@mcp.resource()` or
+    `@mcp.prompt()` function and every call to that handler fails. The client gets an error back,
+    and the server log shows why:
+
+    ```text
+    Context is not available outside of a request
+    ```
+
+    In resources and prompts, write the bare `ctx: Context`. The object your lifespan yielded is
+    still `ctx.request_context.lifespan_context` at runtime; you give up the type parameter, not
+    the object.
+
+!!! tip
+    There is always a lifespan. If you don't pass one, the SDK's default yields an empty `dict`,
+    so `ctx.request_context.lifespan_context` is `{}`, never `None`. That default is also why a
+    bare `Context` types it as `dict[str, Any]`.
+
+## Watch it happen
+
+"Startup runs before the first request" is the kind of sentence you should not have to take on faith.
+
+Strip the server down to the lifecycle: give `Database` a `connected` flag, flip it in `connect()` and `disconnect()`, and add a tool that reports it.
+
+```python title="server.py" hl_lines="11 14 17 25 44"
+# docs_src/lifespan/tutorial002.py
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+
+
+class Database:
+    def __init__(self) -> None:
+        self.connected = False
+
+    async def connect(self) -> None:
+        self.connected = True
+
+    async def disconnect(self) -> None:
+        self.connected = False
+
+
+@dataclass
+class AppContext:
+    db: Database
+
+
+database = Database()
+
+
+@asynccontextmanager
+async def app_lifespan(server: MCPServer) -> AsyncIterator[AppContext]:
+    await database.connect()
+    try:
+        yield AppContext(db=database)
+    finally:
+        await database.disconnect()
+
+
+mcp = MCPServer("Bookshop", lifespan=app_lifespan)
+
+
+@mcp.tool()
+def database_status(ctx: Context[AppContext]) -> str:
+    """Report whether the database connection is up."""
+    db = ctx.request_context.lifespan_context.db
+    return "connected" if db.connected else "disconnected"
+```
+
+`database` lives at module level for one reason: so you can look at it from *outside* the server.
+
+!!! check
+    Three moments, three values:
+
+    * Before the server starts, `database.connected` is `False`. Importing the module connected nothing.
+    * While it's running, call `database_status` and the result is `"connected"`.
+    * Stop the server and the `finally` block runs: `database.connected` is `False` again.
+
+    The work happened exactly where you put it: around the `yield`, not at import time and not per request.
+
+## Recap
+
+* `lifespan=` takes an `@asynccontextmanager` that receives the server and `yield`s one object.
+* Code before the `yield` is startup. The `finally` after it is shutdown.
+* It runs once, around the whole life of the server, not per request.
+* Whatever you `yield` is `ctx.request_context.lifespan_context` in every tool, resource, and prompt.
+* `ctx: Context[AppContext]` makes that access fully typed in tools. Resources and prompts take the bare `Context`.
+* No `lifespan=` means an empty `dict`, never `None`.
+
+A handler that stops mid-call to ask the user for something only they know is **[Elicitation](https://py.sdk.modelcontextprotocol.io/handlers/elicitation/index.md)**.
+
+# Elicitation
+
+Source: https://py.sdk.modelcontextprotocol.io/handlers/elicitation/
+
+A tool that is halfway through its job and missing one answer doesn't have to fail.
+
+**Elicitation** lets it ask. In the middle of a tool call the user gets a question, and their answer comes back into the same function call.
+
+There are two modes:
+
+* **Form mode**: you need a value (a confirmation, a date, a quantity). You describe the fields, the client renders the form.
+* **URL mode**: you need the user to go somewhere else (an OAuth consent screen, a payment page). Nothing they do there passes through the protocol.
+
+And there are two ways to ask. The one to reach for is a **resolver**: you hang the question on a parameter, and the SDK asks - on any connection, whatever protocol era the client speaks. The direct way, `await ctx.elicit(...)`, is a request from the *server* to the *client*, a channel that only exists for a client on a legacy connection (spec version 2025-11-25 or earlier). Both are on this page; start with the resolver.
+
+## Ask with a resolver
+
+A question that gates the whole tool - *are you sure? which of the three matching accounts?* - can be lifted out of the tool body into a **resolver**, and the framework asks it for you.
+
+A parameter annotated `Annotated[T, Resolve(fn)]` is filled by running `fn` before the tool body. The resolver returns the value directly when it already knows it, or returns `Elicit(...)` to have the framework ask:
+
+```python title="server.py" hl_lines="24-30 35-36"
+# docs_src/elicitation/tutorial004.py
+from typing import Annotated
+
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import (
+    AcceptedElicitation,
+    CancelledElicitation,
+    DeclinedElicitation,
+    Elicit,
+    ElicitationResult,
+    Resolve,
+)
+
+mcp = MCPServer("Files")
+
+_FOLDERS: dict[str, list[str]] = {"/tmp/empty": [], "/tmp/project": ["main.py", "README.md"]}
+
+
+class Confirm(BaseModel):
+    ok: bool
+
+
+async def confirm_delete(path: str) -> Confirm | Elicit[Confirm]:
+    """Resolver: ask for confirmation only when the folder is not empty."""
+    file_count = len(_FOLDERS.get(path, []))
+    if file_count == 0:
+        return Confirm(ok=True)  # nothing to confirm, no round-trip to the client
+    return Elicit(f"{path} has {file_count} file(s). Delete anyway?", Confirm)
+
+
+@mcp.tool()
+async def delete_folder(
+    path: str,
+    confirm: Annotated[ElicitationResult[Confirm], Resolve(confirm_delete)],
+) -> str:
+    """Delete a folder, asking for confirmation when it is not empty."""
+    match confirm:
+        case AcceptedElicitation(data=Confirm(ok=True)):
+            _FOLDERS.pop(path, None)
+            return f"deleted {path}"
+        case AcceptedElicitation():
+            return "kept the folder"
+        case DeclinedElicitation():
+            return "declined: folder not deleted"
+        case CancelledElicitation():
+            return "cancelled: folder not deleted"
+```
+
+* `confirm_delete` reads the tool's own `path` argument by name, lists the folder, and **only elicits when it must** - an empty folder resolves to `Confirm(ok=True)` with no round-trip to the client.
+* `delete_folder` annotates `ElicitationResult[Confirm]`, so the framework injects the whole outcome and the tool `match`es every case: accept-and-confirm, accept-but-keep (`ok=False`), decline, cancel.
+* The `confirm` parameter never appears in the tool's input schema - the client supplies `path`, the resolver supplies `confirm`.
+
+Annotate the unwrapped model (`Annotated[Confirm, Resolve(confirm_delete)]`) instead when the tool doesn't need to branch: it receives the model on accept and the call aborts with an error on decline or cancel.
+
+A resolver works on **every** connection. For a client on a legacy connection the SDK sends it the question directly; on a **2026-07-28** connection the SDK *returns* the question from the call, and the client's next attempt carries the answer. Your resolver never knows the difference; what happens underneath is **[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**.
+
+Asking is only one thing a resolver can do. The general mechanism - dependencies that compute without asking, dependencies of dependencies, what the model can and cannot supply - is the **[Dependencies](https://py.sdk.modelcontextprotocol.io/handlers/dependencies/index.md)** page.
+
+## Ask from inside the tool
+
+A tool can also stop in the middle of its own body and ask.
+
+!!! warning
+    `ctx.elicit()` and `ctx.elicit_url()` are requests from the *server* to the *client* - a
+    channel that only exists for a client on a legacy connection (spec version **2025-11-25**
+    or earlier). On a **2026-07-28** connection there are no server-initiated requests, so
+    these calls fail. A resolver works on both. **[Protocol versions](https://py.sdk.modelcontextprotocol.io/protocol-versions/index.md)**
+    has the whole story.
+
+`await ctx.elicit()` takes a message and a Pydantic model:
+
+```python title="server.py" hl_lines="9-11 20-23 25"
+# docs_src/elicitation/tutorial001.py
+from pydantic import BaseModel, Field
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+
+mcp = MCPServer("Bistro")
+
+
+class AlternativeDate(BaseModel):
+    accept_alternative: bool = Field(description="Try another date?")
+    date: str = Field(default="2025-12-26", description="Alternative date (YYYY-MM-DD)")
+
+
+@mcp.tool()
+async def book_table(date: str, party_size: int, ctx: Context) -> str:
+    """Book a table at the bistro."""
+    if date != "2025-12-25":
+        return f"Booked a table for {party_size} on {date}."
+
+    result = await ctx.elicit(
+        message=f"No tables for {party_size} on {date}. Would you like to try another date?",
+        schema=AlternativeDate,
+    )
+    if result.action == "accept" and result.data.accept_alternative:
+        return await book_table(result.data.date, party_size, ctx)
+    return "No booking made."
+```
+
+* The **`Context`** parameter is what gives you `ctx.elicit`; any tool can take one. That object has its own page: **[The Context](https://py.sdk.modelcontextprotocol.io/handlers/context/index.md)**.
+* `AlternativeDate` is the **schema** of the answer you want.
+* The tool is `async def`. It has to be: it stops in the middle and waits for a person.
+* On any other date the tool returns straight away. It only asks when it has to.
+* The date the user accepts goes back through `book_table` itself. An answer is input like any other: an alternative that is also fully booked gets asked about again, not confirmed blind.
+
+### What the client receives
+
+The client gets your message and, next to it, a JSON Schema generated from the model:
+
+```json
+{
+  "properties": {
+    "accept_alternative": {
+      "description": "Try another date?",
+      "title": "Accept Alternative",
+      "type": "boolean"
+    },
+    "date": {
+      "default": "2025-12-26",
+      "description": "Alternative date (YYYY-MM-DD)",
+      "title": "Date",
+      "type": "string"
+    }
+  },
+  "required": ["accept_alternative"],
+  "title": "AlternativeDate",
+  "type": "object"
+}
+```
+
+That schema is the form. `Field(description=...)` is the label; a default pre-fills the input and makes the field optional. It's the same Pydantic-to-JSON-Schema machinery **[Tools](https://py.sdk.modelcontextprotocol.io/servers/tools/index.md)** describes for a tool's arguments.
+
+!!! warning
+    An elicitation schema is not as expressive as a tool's input schema. Flat, primitive fields
+    only: `str`, `int`, `float`, `bool`, or a `Literal` of strings (it becomes an `enum`).
+    Put a model inside the model and `ctx.elicit` raises before anything is sent to the client.
+    The tool call fails with `Error executing tool <name>`, and your server log has the reason:
+
+    ```text
+    TypeError: Elicitation schema field 'address' rendered as {'$ref': '#/$defs/Address'}, which is not a valid PrimitiveSchemaDefinition
+    ```
+
+    You are interrupting a person mid-task. If the answer needs nesting, it should have been an
+    argument to the tool.
+
+### The three answers
+
+`result.action` tells you what the user did, and there are exactly three possibilities:
+
+* `"accept"`: they submitted the form. `result.data` is an `AlternativeDate` instance, already validated.
+* `"decline"`: they said no.
+* `"cancel"`: they dismissed the question without choosing.
+
+`result.data` only exists on `"accept"`, which is why the example checks `result.action` first. Your type checker enforces the order: after `result.action == "accept"`, `result.data` is an `AlternativeDate`; before it, there is no `.data` at all.
+
+A refusal is not an error. The tool decides what declining means (here, no booking) and answers the model normally.
+
+!!! tip
+    The answer is validated against your model before your code sees it. A client that sends
+    `"maybe"` for a `bool` doesn't corrupt your booking: `ctx.elicit` raises `ValueError`, the call
+    fails, and your `if` never runs.
+
+## Send the user to a URL
+
+Some things must not go through the model or the client: credentials, card numbers, OAuth consent. For those you don't ask for data; you ask the user to go somewhere:
+
+```python title="server.py" hl_lines="10-14 23"
+# docs_src/elicitation/tutorial002.py
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+
+mcp = MCPServer("Bistro")
+
+
+@mcp.tool()
+async def pay_deposit(booking_id: str, ctx: Context) -> str:
+    """Take the deposit that confirms a booking."""
+    result = await ctx.elicit_url(
+        message="A 20 EUR deposit confirms your booking.",
+        url=f"https://pay.example.com/deposit/{booking_id}",
+        elicitation_id=f"deposit-{booking_id}",
+    )
+    if result.action == "accept":
+        return "Complete the payment in your browser."
+    return "No deposit taken. The booking expires in one hour."
+
+
+@mcp.tool()
+async def confirm_deposit(booking_id: str, ctx: Context) -> str:
+    """Record a payment reported by the payment provider."""
+    await ctx.session.send_elicit_complete(f"deposit-{booking_id}")
+    return f"Deposit received for booking {booking_id}."
+```
+
+* `ctx.elicit_url()` takes the message, the **URL** to visit, and an `elicitation_id` you choose: any string that identifies this elicitation within your server.
+* The result has an action and nothing else. `"accept"` means the user agreed to open the URL, **not** that they finished what's on the other side.
+* The payment happens out of band, between the user's browser and your payment provider. No content ever comes back through MCP.
+
+Look at the second tool. When your server learns the out-of-band flow finished (a webhook, a poll; here it's modelled as a second tool), `ctx.session.send_elicit_complete(...)` sends `notifications/elicitation/complete` with the same `elicitation_id`. That is how the client knows it can stop showing *"waiting for payment..."*. Without it, the client can only guess.
+
+## The client side
+
+Servers ask. Clients answer by passing an **`elicitation_callback`** to `Client(...)`:
+
+```python title="client.py" hl_lines="6-7 18"
+# docs_src/elicitation/tutorial003.py
+from mcp import Client
+from mcp.client import ClientRequestContext
+from mcp.types import ElicitRequestParams, ElicitRequestURLParams, ElicitResult
+
+
+async def handle_elicitation(context: ClientRequestContext, params: ElicitRequestParams) -> ElicitResult:
+    if isinstance(params, ElicitRequestURLParams):
+        print(f"Open this link to continue: {params.url}")
+        return ElicitResult(action="accept")
+    print(params.message)
+    return ElicitResult(action="accept", content={"accept_alternative": True, "date": "2025-12-27"})
+
+
+async def main() -> None:
+    async with Client(
+        "http://127.0.0.1:8000/mcp",
+        mode="legacy",
+        elicitation_callback=handle_elicitation,
+    ) as client:
+        result = await client.call_tool("book_table", {"date": "2025-12-25", "party_size": 2})
+        print(result.content)
+```
+
+* One callback handles both modes. `params` is a union of `ElicitRequestFormParams` and `ElicitRequestURLParams`; `isinstance` is the branch.
+* For a URL, you show `params.url` to the user and return the action they chose. Never any `content`.
+* For a form, a real application renders `params.requested_schema` and returns the user's input as `content`. This one always says yes with a canned answer, which is exactly the callback you want in a test.
+* Passing the callback is also the **capability declaration**: it's how the server learns this client can be asked. The other things a client can answer for a server live in **[Client callbacks](https://py.sdk.modelcontextprotocol.io/client/callbacks/index.md)**.
+
+!!! info
+    Elicitation is a request from the *server* to the *client*, and those only exist on a
+    classic-handshake session, which is why this client passes `mode="legacy"`.
+    On a **2026-07-28** connection a tool asks by *returning* the question from the call
+    instead; that flow is **[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**.
+
+### Try it
+
+Start the `ctx.elicit` form-mode `server.py` (the `book_table` one) on Streamable HTTP (**[Running your server](https://py.sdk.modelcontextprotocol.io/run/index.md)** has the one-liner), then run the client's `main()` and ask `book_table` for Christmas day.
+
+The callback prints the question it was sent:
+
+```text
+No tables for 2 on 2025-12-25. Would you like to try another date?
+```
+
+It answers with `{"accept_alternative": True, "date": "2025-12-27"}`, and the tool, which has been waiting inside `await ctx.elicit(...)` this whole time, finishes the booking:
+
+```text
+Booked a table for 2 on 2025-12-27.
+```
+
+Now swap in the URL-mode `server.py` and point the same `main()` at `pay_deposit`: the same callback takes the other branch, prints the payment link, and the tool comes back with *"Complete the payment in your browser."* One round trip, mid-call, in both directions.
+
+!!! check
+    Now remove `elicitation_callback=` from the `Client` and call `book_table` for Christmas day
+    again. The whole call fails with a protocol error:
+
+    ```text
+    Elicitation not supported
+    ```
+
+    A client that registered no callback never declared the `elicitation` capability, so there is
+    nobody to ask. Your tool didn't get a `"decline"`; it got an exception. Design for it: every
+    elicitation needs a sensible answer to "what if I can't ask?".
+
+## Recap
+
+* A parameter annotated `Annotated[T, Resolve(fn)]` is filled by a resolver, which returns `Elicit(...)` when it has to ask. It works on every connection.
+* The schema is a flat Pydantic model: primitive fields only, validated on the way back.
+* `result.action` is `"accept"`, `"decline"` or `"cancel"`; `result.data` exists only on accept.
+* `await ctx.elicit(message, schema=Model)` asks from inside the tool body, and `await ctx.elicit_url(message, url, elicitation_id)` is for everything that must not pass through the model (`ctx.session.send_elicit_complete(elicitation_id)` says the out-of-band part is done). Both are server-to-client requests: they need the client on a legacy connection.
+* The client answers with one `elicitation_callback`, branching on the params type; registering it is what declares the capability.
+* On a 2026-07-28 connection the server returns the question instead of pushing it; the same callback is fed by **[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**.
+
+Everything underneath that return (the retry loop, protecting `requestState`, driving it yourself) is **[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**.
+
+# Multi-round-trip requests
+
+Source: https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/
+
+Sometimes a tool can't finish in one round trip. It needs something only the user has: a choice, a confirmation, a credential.
+
+Before 2026-07-28 the server got it by calling **back**: opening its own request to the client (an elicitation, a sampling call) in the middle of handling the original one. The 2026-07-28 spec retires that back-channel.
+
+Instead, the server **returns**.
+
+## Return, don't call back
+
+The server answers `tools/call` with an **`InputRequiredResult`** instead of a `CallToolResult`. Two of its fields do the work:
+
+* **`input_requests`**: what the server still needs, as a dict keyed by names the server chose. Each value is an `ElicitRequest`, a `CreateMessageRequest`, or a `ListRootsRequest`.
+* **`request_state`**: an opaque token. The client echoes it back verbatim on the retry. Your server is the only thing that reads it.
+
+The client fulfils each request, then calls the **same tool again**, carrying its answers in `input_responses` and the token in `request_state`. The server now has what it was missing and returns a normal `CallToolResult`.
+
+That's the whole protocol. Every leg is an ordinary request from the client to the server. Nothing ever flows the other way.
+
+## The server side
+
+On `@mcp.tool()` you rarely build this by hand: declare a dependency that asks the user (`Elicit`), samples the client's LLM (`Sample`), or lists its roots (`ListRoots`) and the SDK returns the `InputRequiredResult` for you; that form is the **[Dependencies](https://py.sdk.modelcontextprotocol.io/handlers/dependencies/index.md)** page. The two forms don't mix: a call has one `input_responses`/`request_state` channel, so a tool that uses `Resolve(...)` parameters cannot also return `InputRequiredResult` from its body. A declared `InputRequiredResult` return is rejected at registration (`InvalidSignature`), and an undeclared one fails the call at runtime. The manual form is the **low-level** `Server`, whose `on_call_tool` handler is allowed to return either result type:
+
+```python title="server.py" hl_lines="43-46"
+# docs_src/mrtr/tutorial001.py
+from mcp.server import Server, ServerRequestContext
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    ElicitRequest,
+    ElicitRequestFormParams,
+    ElicitResult,
+    InputRequiredResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    TextContent,
+    Tool,
+)
+
+ASK_REGION = ElicitRequest(
+    params=ElicitRequestFormParams(
+        message="Which region should the database live in?",
+        requested_schema={
+            "type": "object",
+            "properties": {"region": {"type": "string"}},
+            "required": ["region"],
+        },
+    )
+)
+
+
+async def list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams | None) -> ListToolsResult:
+    return ListToolsResult(
+        tools=[
+            Tool(
+                name="provision",
+                description="Provision a database. Asks which region to put it in.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+            )
+        ]
+    )
+
+
+async def call_tool(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult | InputRequiredResult:
+    answer = (params.input_responses or {}).get("region")
+    if not isinstance(answer, ElicitResult) or answer.content is None:
+        return InputRequiredResult(input_requests={"region": ASK_REGION}, request_state="provision-v1")
+    name = (params.arguments or {})["name"]
+    text = f"Provisioned {name!r} in {answer.content['region']}."
+    return CallToolResult(content=[TextContent(type="text", text=text)])
+
+
+server = Server("Provisioner", on_list_tools=list_tools, on_call_tool=call_tool)
+```
+
+* `on_call_tool` is typed `-> CallToolResult | InputRequiredResult`. Returning the second one is the entire server-side API.
+* On the first call `params.input_responses` is `None`, so the guard fires and the handler asks instead of answering.
+* On the retry, the `ElicitResult` the client sent is sitting under the **same key** (`"region"`) that the server used in `input_requests`.
+
+Everything else in that file (the explicit `input_schema`, the hand-built `CallToolResult`) is the ordinary low-level `Server`, covered in **[The low-level Server](https://py.sdk.modelcontextprotocol.io/advanced/low-level-server/index.md)**. This page only adds the second return type.
+
+## Beyond tools
+
+`tools/call` is not special: at 2026-07-28 a server may answer `prompts/get` and `resources/read` the same way. On `MCPServer`, an `@mcp.prompt()` function — or an `@mcp.resource()` **template** function — returns the `InputRequiredResult` itself and reads the retry's answers off the context:
+
+```python title="server.py" hl_lines="20 22 24"
+# docs_src/mrtr/tutorial004.py
+from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.prompts.base import UserMessage
+from mcp.types import ElicitRequest, ElicitRequestFormParams, ElicitResult, InputRequiredResult
+
+mcp = MCPServer("Briefing")
+
+ASK_AUDIENCE = ElicitRequest(
+    params=ElicitRequestFormParams(
+        message="Who is the briefing for?",
+        requested_schema={
+            "type": "object",
+            "properties": {"audience": {"type": "string"}},
+            "required": ["audience"],
+        },
+    )
+)
+
+
+@mcp.prompt()
+async def briefing(ctx: Context) -> list[UserMessage] | InputRequiredResult:
+    """Draft a briefing tuned to its audience."""
+    answer = (ctx.input_responses or {}).get("audience")
+    if not isinstance(answer, ElicitResult) or answer.content is None:
+        return InputRequiredResult(input_requests={"audience": ASK_AUDIENCE})
+    return [UserMessage(f"Write a briefing for {answer.content['audience']}.")]
+```
+
+* The first round returns the `InputRequiredResult`. On the retry, `ctx.input_responses` holds the answers under the same keys and the function returns its ordinary result — prompt messages here, resource content for a template resource.
+* A `request_state` you set is sealed before it crosses the wire and verified on the echo, like everything else on the server; **[Protecting `requestState`](#protecting-requeststate)** below covers what the seal gives you and when you need to configure keys.
+* An `@mcp.tool()` function can return the result directly the same way, when the dependency form doesn't fit.
+* Static `@mcp.resource()` functions don't participate: they take no `Context`, so they could never read the retry. Only template resources can ask.
+* The era rules below apply unchanged: returning an `InputRequiredResult` on a pre-2026 session is the same `-32603` the warning describes.
+
+## The client side
+
+`Client` runs the loop for you.
+
+Register the callbacks the server might ask for (`elicitation_callback`, `sampling_callback`, `list_roots_callback`) and call the tool. When an `InputRequiredResult` arrives, `Client` dispatches each entry in `input_requests` to the matching callback, retries with the answers and the echoed `request_state`, and keeps going until a `CallToolResult` comes back:
+
+```python title="client.py" hl_lines="11 12"
+# docs_src/mrtr/tutorial003.py
+from mcp import Client
+from mcp.client import ClientRequestContext
+from mcp.types import ElicitRequestParams, ElicitResult
+
+
+async def handle_elicitation(context: ClientRequestContext, params: ElicitRequestParams) -> ElicitResult:
+    return ElicitResult(action="accept", content={"region": "eu-west-1"})
+
+
+async def main() -> None:
+    async with Client("http://127.0.0.1:8000/mcp", elicitation_callback=handle_elicitation) as client:
+        result = await client.call_tool("provision", {"name": "orders"})
+        print(result.content)
+```
+
+* That `elicitation_callback` is the same one a pre-2026 server's back-channel `elicitation/create` would have hit. The same is true of `sampling_callback` for `sampling/createMessage` and `list_roots_callback` for `roots/list`: at 2026-07-28 the standalone server->client RPCs are gone, but the identical `ElicitRequest` / `CreateMessageRequest` / `ListRootsRequest` payloads ride inside `input_requests` and dispatch to the same three callbacks. One set of callbacks serves both eras.
+* `call_tool` returns a plain `CallToolResult`. The intermediate rounds are invisible to the caller.
+* `get_prompt` and `read_resource` drive the same loop.
+
+!!! check
+    Leave the callback off and the loop fails on the first round: the SDK's stand-in callback
+    answers every elicitation with an error, and `call_tool` raises `MCPError` with the message
+    *"Elicitation not supported"*.
+
+The loop is bounded. `Client(..., input_required_max_rounds=10)` is the default cap; a server that keeps returning `InputRequiredResult` past it makes `call_tool` raise. If a round carries only `request_state` and no `input_requests`, `Client` sleeps briefly (50ms doubling to a 250ms ceiling) before retrying, so a server that is just saying *"not done yet"* isn't busy-polled.
+
+### Driving the loop yourself
+
+The auto-loop is enough for a single-process client. Own the loop instead when:
+
+* Your client is **distributed**: the process that renders the question to the user is not the process that called `call_tool`, so a different worker issues the retry. `request_state` is the persistable token you carry across that boundary, through your own storage, and `input_responses` is what the other side sends back with it.
+* You want to **inspect** each round: log or audit every `input_requests` entry, refuse certain request kinds, or apply your own backoff between legs.
+* You want a **wall-clock** bound rather than a round-count bound: wrap your own loop in `anyio.fail_after(...)` instead of relying on `input_required_max_rounds`.
+
+Drop to the underlying session, where `allow_input_required=True` hands you the union directly:
+
+```python title="client.py" hl_lines="12 13 19"
+# docs_src/mrtr/tutorial002.py
+from mcp import Client
+from mcp.types import CallToolResult, ElicitRequest, ElicitResult, InputRequest, InputRequiredResult, InputResponse
+
+
+def fulfil(request: InputRequest) -> InputResponse:
+    if not isinstance(request, ElicitRequest):
+        raise NotImplementedError(f"this client cannot answer a {request.method!r} request")
+    return ElicitResult(action="accept", content={"region": "eu-west-1"})
+
+
+async def provision(client: Client, name: str) -> CallToolResult:
+    result = await client.session.call_tool("provision", {"name": name}, allow_input_required=True)
+    while isinstance(result, InputRequiredResult):
+        responses = {key: fulfil(request) for key, request in (result.input_requests or {}).items()}
+        result = await client.session.call_tool(
+            "provision",
+            {"name": name},
+            input_responses=responses,
+            request_state=result.request_state,
+            allow_input_required=True,
+        )
+    return result
+```
+
+* `client.session.call_tool(..., allow_input_required=True)` widens the return type to `CallToolResult | InputRequiredResult`. The `isinstance` is what narrows it back.
+* `request_state` is now in your hands. Write it down between legs and the conversation can resume from a fresh process.
+* For every entry in `input_requests` you put an `InputResponse` under the **same key** in `input_responses`. `fulfil` is where your UI goes; this one hard-codes the answer.
+* Same tool name, same `arguments`, every leg. The retry is the original call carried out again, not a new method.
+
+## Protecting `requestState`
+
+Everything above treats `request_state` as an echo, and on the wire that is all it is. But the client holds it between legs (writing it down across processes is exactly what the previous section blessed), so what comes back is **client-supplied input**: it can be modified, expired, or lifted from a different call entirely. The spec requires servers to integrity-protect this state and reject the round when verification fails, whenever the state can influence authorization, resource access, or business logic.
+
+`MCPServer` protects it by default. Every server seals outgoing `requestState` and verifies every echo — resolver state and hand-built state alike — under a key generated at process start. You configure nothing, write plaintext, and read plaintext; the wire only ever carries an opaque encrypted token.
+
+The default key lives and dies with the process, which is the one thing you must know before deploying beyond a single process:
+
+```python
+from mcp.server.mcpserver import MCPServer, RequestStateSecurity
+
+# Multi-instance or restart-surviving: one or more shared secret keys (>= 32 bytes each).
+mcp = MCPServer("fleet", request_state_security=RequestStateSecurity(keys=[key]))
+```
+
+* **The default (no configuration)** suits a single process: stdio, or exactly one HTTP worker. A retry that lands on a different worker, a different instance behind a load balancer, or the same server after a restart is sealed under a key that process doesn't have — the client gets the frozen rejection below and must start the flow over.
+* **`keys=[...]`** is required whenever a retry can reach a **different instance** (multi-worker `uvicorn`, load-balanced HTTP) or must survive restarts: every instance verifies what any sibling minted. Same machinery, your secret instead of a generated one.
+* For your own crypto, such as a KMS or an existing token service, pass `RequestStateSecurity(codec=...)` instead of `keys`; **[Bring your own crypto](#bring-your-own-crypto)** below covers the contract.
+
+### What the seal carries
+
+Default or configured, `requestState` on the wire is an encrypted, authenticated token. Your code never sees it: handlers and resolvers write plaintext and read plaintext (`ctx.request_state`); the SDK seals on the way out and verifies on the way in. Beyond integrity, each token is bound to:
+
+* **A time window.** Every round re-seals with a fresh expiry, so `RequestStateSecurity(ttl=...)` (default 600 seconds) bounds per-round think time, not the whole flow.
+* **The authenticated principal.** When the request carries an OAuth access token the SDK validated, the state is bound to the token's client, issuer, and subject: state minted for one user fails under another, even when both users share one OAuth client. A verifier that supplies no subject degrades the binding to the client identity alone, which under URL-based client IDs is shared by every user of that client software. When auth is terminated outside the SDK (a fronting proxy), or the transport is unauthenticated, there is no principal to bind and this check is inert, unless `RequestStateSecurity(bind_principal=...)` supplies one from your own identity signal. Whichever components your token verifier supplies, it must supply them consistently: a verifier that includes the subject on some requests and omits it on others changes the principal mid-flow, and in-flight rounds are rejected.
+* **The originating request.** The method, the tool or prompt name (or resource URI), and a digest of the arguments. A token replayed against a different tool, different arguments, or a different method fails.
+* **The exact question asked.** Every resolver answer is pinned to the rendered question the client was shown, both on the round it first arrives and when a recorded answer is reused later. Redeploy with a reworded message or a changed schema and the server re-asks instead of consuming a stale answer. The same pinning cuts the other way: derive messages from the tool's arguments, not from per-call data. A message built from a timestamp or a live rate renders differently every round, so every recorded answer looks stale and the server re-asks until the client's round limit ends the call.
+
+All of that is the SDK's job, not yours, and not the codec's if you bring your own.
+
+### Rotating keys
+
+`keys[0]` seals new state; every key in the list verifies. Zero-downtime rotation is three phases, each fully rolled out before the next:
+
+```python
+RequestStateSecurity(keys=[OLD, NEW])  # 1: every instance learns to verify NEW; OLD still mints
+RequestStateSecurity(keys=[NEW, OLD])  # 2: NEW mints; in-flight OLD state keeps verifying
+RequestStateSecurity(keys=[NEW])       # 3: one ttl after phase 2 is fully out, retire OLD
+```
+
+Never promote the minter first: minting under a key some instance can't yet verify drops in-flight rounds mid-rollout.
+
+Keys are scoped to one service. The sealed envelope also carries the server's name as an audience claim, so a token minted by a different service that happens to share a secret is rejected anyway. The claim is only as distinctive as the name, so a server given an explicit policy must have a real name or set `RequestStateSecurity(audience=...)` — an unnamed one raises at construction. `audience=` also serves deliberate multi-service topologies where one service must accept state another minted. (The no-configuration default is exempt: its key never leaves the process, so the audience claim has nothing to add.)
+
+### Bring your own crypto
+
+`RequestStateSecurity(codec=...)` takes anything with `seal(bytes) -> str` and `unseal(str) -> bytes` that raises `InvalidRequestState` for any token it did not mint. The classic shape is envelope encryption against a KMS, where you unwrap a data key once at startup and keep the per-token crypto local:
+
+```python title="server.py" hl_lines="12 26-27 34-35 38"
+# docs_src/mrtr/tutorial005.py
+import os
+
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import InvalidRequestState, RequestStateSecurity
+
+PREFIX = "kms1."  # format version; fed to GCM as associated data, so it is bound under the tag
+
+
+def unwrap_data_key() -> bytes:
+    """One KMS call at process start, kms.decrypt(CiphertextBlob=...); every token after that is local crypto."""
+    return os.urandom(32)  # stand-in for the unwrapped 32-byte data key
+
+
+class EnvelopeCodec:
+    def __init__(self, data_key: bytes) -> None:
+        self._aesgcm = AESGCM(data_key)
+
+    def seal(self, payload: bytes) -> str:
+        nonce = os.urandom(12)
+        return PREFIX + (nonce + self._aesgcm.encrypt(nonce, payload, PREFIX.encode())).hex()
+
+    def unseal(self, token: str) -> bytes:
+        if not token.startswith(PREFIX):
+            raise InvalidRequestState("unknown token format")
+        body = token[len(PREFIX) :]
+        try:
+            raw = bytes.fromhex(body)
+            if raw.hex() != body:  # only the exact string seal() produced verifies
+                raise ValueError("non-canonical hex")
+            return self._aesgcm.decrypt(raw[:12], raw[12:], PREFIX.encode())
+        except (ValueError, InvalidTag) as exc:
+            raise InvalidRequestState("token failed verification") from exc
+
+
+mcp = MCPServer("Deployer", request_state_security=RequestStateSecurity(codec=EnvelopeCodec(unwrap_data_key())))
+```
+
+TTL, principal binding, and request binding are **not** the codec's job: the SDK stamps them into the payload before `seal` and re-verifies them after `unseal`, for every codec. A codec's only obligations are integrity (tampered means raise) and, ideally, confidentiality.
+
+### When verification fails
+
+Every inbound failure, whether tampered, expired, replayed against a different request or principal, or sealed under a key this server doesn't know, gets the same answer:
+
+```json
+{"code": -32602, "message": "Invalid or expired requestState"}
+```
+
+One frozen message for every cause, so the wire never reveals which check failed; the real reason goes to the server log. Every inbound `requestState` on `tools/call`, `prompts/get`, and `resources/read` is checked, including one arriving for a handler that never mints state. The most common rejection in practice isn't an attacker — it's the default process-local key meeting a retry from before a restart or from another instance; the client restarts the flow, and `keys=[...]` is the fix when that matters.
+
+### Hand-built state
+
+A `request_state` you set yourself (returning `InputRequiredResult` from a tool, prompt, or resource-template function) is sealed and verified by the same machinery as resolver state, with zero code changes: write plaintext, read plaintext, and every binding above applies.
+
+The one thing the SDK cannot pin for you, even when configured, is question identity: it doesn't know which of *your* questions an answer in your state belongs to. If you store answers keyed by question, include your own question identifier in the state and check it on the retry.
+
+The low-level `Server` is the no-batteries tier: unlike `MCPServer`, nothing is sealed until you append the boundary yourself, and your `request_state` crosses the wire exactly as written until you do. The one-line opt-in is shown in **[The low-level Server](https://py.sdk.modelcontextprotocol.io/advanced/low-level-server/index.md#the-other-handlers)**.
+
+## A 2026-07-28 result
+
+`InputRequiredResult` only exists at protocol version **2026-07-28**. `Client`'s default `mode="auto"` discovers it on any connection. After connecting, `client.protocol_version` tells you what you got.
+
+!!! warning
+    A pre-2026 session has nowhere to put an `InputRequiredResult`. Return one from your handler on a
+    `mode="legacy"` connection and the runner cannot serialize it into the negotiated version; the
+    client gets back a `-32603` *"Handler returned an invalid result"* error. A server that serves
+    both eras must check `ctx.protocol_version` before reaching for it.
+
+!!! info
+    **URL-mode elicitation** rides this exact mechanism on a 2026 connection. The entry in
+    `input_requests` is an `ElicitRequest` whose params are `ElicitRequestURLParams`; the user
+    finishes the out-of-band flow and your client retries the call. Same loop, no new API. The
+    high-level server half is in **[Elicitation](https://py.sdk.modelcontextprotocol.io/handlers/elicitation/index.md)**.
+
+## Recap
+
+* At 2026-07-28 a server that needs input mid-call **returns** an `InputRequiredResult`. It never opens a request to the client.
+* `input_requests` is what it needs. `request_state` is an opaque resume token only the server reads.
+* `Client` runs the retry loop for you: register `elicitation_callback` / `sampling_callback` / `list_roots_callback` and `call_tool` returns a plain `CallToolResult`. `input_required_max_rounds` (default 10) bounds it.
+* To inspect or persist rounds, use `client.session.call_tool(..., allow_input_required=True)` and own the `while isinstance(result, InputRequiredResult)` loop yourself.
+* On `@mcp.tool()`, a dependency that asks the user produces this result for you (**[Dependencies](https://py.sdk.modelcontextprotocol.io/handlers/dependencies/index.md)**); the **low-level** `Server` is the manual form.
+* Prompts and resources participate too: an `@mcp.prompt()` or template `@mcp.resource()` function returns the `InputRequiredResult` itself and reads `ctx.input_responses` on the retry.
+* `requestState` comes back as client-supplied input, so `MCPServer` seals it by default — resolver state and hand-built state alike — under a process-local key; multi-instance deployments pass `RequestStateSecurity(keys=[...])` (or a custom codec) so every instance can verify what a sibling minted. The seal binds every token to a time window, the originating request, and the authenticated principal when the request carries auth the SDK validated or `bind_principal=` supplies your own identity signal (**[Protecting `requestState`](#protecting-requeststate)**).
+
+This is the mechanism that replaces server-initiated sampling and the rest of the push-style back-channel; see **[Deprecated features](https://py.sdk.modelcontextprotocol.io/deprecated/index.md)**.
+
+# Sampling and roots
+
+Source: https://py.sdk.modelcontextprotocol.io/handlers/sampling-and-roots/
+
+A handler can ask the connected client for two more things: a completion from the client's own model (**sampling**), and the client's workspace folders (**roots**).
+
+Both still work, on every protocol version the SDK speaks. But read the warning before you design around them:
+
+!!! warning "Deprecated by the 2026-07-28 specification"
+    Sampling and roots are deprecated as of `2026-07-28` ([SEP-2577](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/2577)). They remain fully functional and stay in the specification for at least twelve months before becoming eligible for removal, but new implementations should not build on them. The suggested migrations: integrate directly with your LLM provider's API instead of sampling, and pass directories via tool parameters, resource URIs, or server configuration instead of roots. The SDK-wide list is in **[Deprecated features](https://py.sdk.modelcontextprotocol.io/deprecated/index.md)**.
+
+## Sampling: borrow the client's model
+
+A resolver returns `Sample(...)` and the tool receives the completion, through the same dependency mechanism that runs `Elicit` in **[Dependencies](https://py.sdk.modelcontextprotocol.io/handlers/dependencies/index.md)**:
+
+```python title="server.py" hl_lines="10-15 19"
+# docs_src/sampling_and_roots/tutorial001.py
+from typing import Annotated
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Resolve, Sample
+from mcp.types import CreateMessageResult, SamplingMessage, TextContent
+
+mcp = MCPServer("Bookshop")
+
+
+def draft_blurb(title: str) -> Sample:
+    prompt = f"Write a one-sentence blurb for the book {title!r}."
+    return Sample(
+        [SamplingMessage(role="user", content=TextContent(type="text", text=prompt))],
+        max_tokens=60,
+    )
+
+
+@mcp.tool()
+async def blurb(title: str, draft: Annotated[CreateMessageResult, Resolve(draft_blurb)]) -> str:
+    """Draft a blurb for a book."""
+    return draft.content.text if draft.content.type == "text" else "No blurb."
+```
+
+* `Sample(messages, max_tokens=...)` mirrors the `sampling/createMessage` parameters. The injected value is the client's `CreateMessageResult`; pass `tools` or `tool_choice` and it becomes a `CreateMessageResultWithTools` instead.
+* The client must have declared the `sampling` capability (`sampling.tools` if you pass `tools` or `tool_choice`). If it didn't, the call fails with a `-32021` protocol error instead of sending a request the client cannot handle. A pre-2026 session with no back-channel fails with its usual no-back-channel error, since there is nothing to send on.
+* At `2026-07-28` the request is delivered inside the multi-round-trip flow (**[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**); on `2025-11-25` it is a standalone request to the client. The code is the same either way, but mind the multi-round-trip rule: the request must render identically across retry rounds, so build it only from the tool's arguments and other stable data.
+* Leave `include_context` alone: values other than `"none"` are themselves deprecated (SEP-2596) and need a capability almost no client declares.
+
+## Roots: where should this go?
+
+Roots are the folders the client says the server may operate on. They are informational guidance, not an access-control mechanism. A resolver returns `ListRoots()`:
+
+```python title="server.py" hl_lines="10-11 15"
+# docs_src/sampling_and_roots/tutorial002.py
+from typing import Annotated
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import ListRoots, Resolve
+from mcp.types import ListRootsResult
+
+mcp = MCPServer("Bookshop")
+
+
+def workspace_roots() -> ListRoots:
+    return ListRoots()
+
+
+@mcp.tool()
+async def catalog_folder(roots: Annotated[ListRootsResult, Resolve(workspace_roots)]) -> str:
+    """Pick the folder the catalog export should go to."""
+    if not roots.roots:
+        return "No workspace folders shared."
+    return str(roots.roots[0].uri)
+```
+
+* The injected `ListRootsResult` carries a list of `Root`s: a `file://` URI and an optional display name.
+* The gate is the same as for sampling: without a declared `roots` capability the call fails with `-32021` instead of sending the request.
+
+On the other side of the wire, the client answers both requests with the callbacks it already has: `sampling_callback` and `list_roots_callback`, covered in **[Client callbacks](https://py.sdk.modelcontextprotocol.io/client/callbacks/index.md)**.
+
+## On 2025-era connections
+
+`ctx.session.create_message(...)` and `ctx.session.list_roots()` still exist for code that drives the session directly. They only work where a back-channel exists (2025-era, non-stateless connections), and calling them raises a deprecation warning. The resolver markers above are the supported form: they pick the delivery from the negotiated version and don't warn.
+
+## Recap
+
+* Return `Sample(...)` or `ListRoots()` from a resolver; the tool receives the `CreateMessageResult` or `ListRootsResult` like any other dependency.
+* The client must declare the matching capability, or the call fails with `-32021` instead of a request being sent.
+* Both features are deprecated at `2026-07-28`: fully functional for now, wrong for new designs. Prefer provider APIs over sampling and explicit parameters over roots.
+
+Reporting how far along a slow tool is: **[Progress](https://py.sdk.modelcontextprotocol.io/handlers/progress/index.md)**.
+
+# Progress
+
+Source: https://py.sdk.modelcontextprotocol.io/handlers/progress/
+
+A tool that takes thirty seconds and says nothing for thirty seconds looks broken.
+
+**Progress notifications** fix that. The tool reports how far along it is; the client decides what to draw with it: a bar, a spinner, a log line.
+
+## Report it from the tool
+
+Take a **`Context`** parameter and call `report_progress`:
+
+```python title="server.py" hl_lines="8 11"
+# docs_src/progress/tutorial001.py
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.tool()
+async def import_catalog(urls: list[str], ctx: Context) -> str:
+    """Import book records from a list of catalog URLs."""
+    for done, url in enumerate(urls, start=1):
+        await ctx.report_progress(done, total=len(urls), message=f"Imported {url}")
+    return f"Imported {len(urls)} records."
+```
+
+Three arguments, and you decide what they mean:
+
+* `progress`: how far you are. The spec requires it to **increase** with every report; never repeat a value or go backwards.
+* `total`: how much there is in total, if you know. Optional.
+* `message`: one human-readable line about *this* step. Optional.
+
+`ctx` is injected because of its type hint and the model never sees it: `import_catalog`'s input schema has a single property, `urls`. **[The Context](https://py.sdk.modelcontextprotocol.io/handlers/context/index.md)** page is all about that object; progress is one of the things it gives you.
+
+## Listen for it from the client
+
+The client opts in **per call**, by passing `progress_callback=` to `call_tool`:
+
+```python title="client.py" hl_lines="5 14"
+import anyio
+from mcp import Client
+
+
+async def show(progress: float, total: float | None, message: str | None) -> None:
+    print(f"{message} ({progress}/{total})")
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        result = await client.call_tool(
+            "import_catalog",
+            {"urls": ["https://example.com/a.json", "https://example.com/b.json"]},
+            progress_callback=show,
+        )
+    print(result.structured_content)
+
+
+anyio.run(main)
+```
+
+The callback is an `async` function taking exactly what the server reported: `progress`, `total`, `message`.
+
+!!! info
+    `progress_callback` is the same parameter whatever you handed `Client`: a URL as here, a
+    `StdioServerParameters`, or the server object in a test. Mind the timing over a real
+    transport, though. Each notification is delivered on its own, beside the response, so a slow
+    callback can still be running after `call_tool` has returned. Only the in-process test
+    connection runs the callback inline and guarantees every report lands first.
+
+### Try it
+
+Serve `server.py` over HTTP, then run the client from a second terminal:
+
+```console
+uv run mcp run server.py --transport streamable-http
+```
+
+```console
+python client.py
+```
+
+```text
+Imported https://example.com/a.json (1.0/2.0)
+Imported https://example.com/b.json (2.0/2.0)
+{'result': 'Imported 2 records.'}
+```
+
+Every `await ctx.report_progress(...)` on the server became one call to `show` on the client, in order. Progress is not bundled into the result. It streams while the tool is still working.
+
+!!! warning
+    `progress_callback` belongs to the **call**, not the `Client`. There is no constructor argument
+    for it, because different calls want different callbacks: one drives a download bar, the next
+    one a log line.
+
+!!! check
+    Now delete `progress_callback=show` and run it again:
+
+    ```text
+    {'result': 'Imported 2 records.'}
+    ```
+
+    No error, no warning, same result. `report_progress` is a **no-op when the caller didn't ask
+    for progress**, so you report unconditionally and never have to wonder whether anyone is
+    listening.
+
+## When you don't know the total
+
+`total` is for when you know the denominator. Often you don't: you're draining a feed, walking a cursor, downloading something with no length header.
+
+Leave it out:
+
+```python title="server.py" hl_lines="20"
+# docs_src/progress/tutorial002.py
+from collections.abc import AsyncIterator
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+
+mcp = MCPServer("Bookshop")
+
+
+async def fetch_records(feed_url: str) -> AsyncIterator[str]:
+    for title in ("Dune", "Neuromancer", "Hyperion"):
+        yield f"{feed_url}#{title}"
+
+
+@mcp.tool()
+async def import_feed(feed_url: str, ctx: Context) -> str:
+    """Import every record a catalog feed yields."""
+    imported = 0
+    async for record in fetch_records(feed_url):
+        imported += 1
+        await ctx.report_progress(imported, message=f"Imported {record}")
+    return f"Imported {imported} records."
+```
+
+The callback receives `total=None`. A client can still show *activity* ("3 imported so far...") but it can't show a percentage. Don't invent a total to get a prettier bar.
+
+!!! tip
+    `progress` doesn't have to count anything in particular. Bytes, rows, pages: pick the unit the
+    user would recognise, and only promise a `total` you can keep.
+
+## Recap
+
+* `await ctx.report_progress(progress, total=None, message=None)` from any tool that takes a `Context`.
+* The client passes `progress_callback=` to `call_tool`: per call, never on the `Client`.
+* The callback is `async (progress, total, message) -> None` and fires while the tool is still running.
+* No callback on the call means `report_progress` does nothing. Report unconditionally.
+* Omit `total` when you don't know it; the callback gets `None`.
+
+Progress is what a running tool shows the *user*. The lines it logs for *you*, the person operating the server, are a different channel: **[Logging](https://py.sdk.modelcontextprotocol.io/handlers/logging/index.md)**.
+
+# Logging
+
+Source: https://py.sdk.modelcontextprotocol.io/handlers/logging/
+
+Log from a tool the way you log from any other Python function: with the standard library.
+
+MCP has a protocol-level **logging capability**: a server could push its log messages to the client as notifications, through methods on the `Context` object. The 2026-07-28 revision of the spec **deprecates that capability and does not replace it**, so these docs don't teach it. The full list of what's deprecated and what to do instead is in **[Deprecated features](https://py.sdk.modelcontextprotocol.io/deprecated/index.md)**.
+
+What you do instead is what you do in every other Python program: the standard library.
+
+## A tool that logs
+
+```python title="server.py" hl_lines="1 5 13"
+# docs_src/logging/tutorial001.py
+import logging
+
+from mcp.server import MCPServer
+
+logger = logging.getLogger(__name__)
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.tool()
+def search_books(query: str) -> str:
+    """Search the catalog by title or author."""
+    logger.info("Searching for %r", query)
+    return f"Found 3 books matching {query!r}."
+```
+
+* `logging.getLogger(__name__)` gives you a logger named after your module. Create it once, at the top.
+* Inside the tool you call `logger.info(...)` like in any other function. Nothing to inject, nothing to `await`, nothing MCP-specific.
+
+!!! check
+    Call the tool and look at the whole result:
+
+    ```python
+    result.content             # [TextContent(text="Found 3 books matching 'dune'.")]
+    result.structured_content  # {'result': "Found 3 books matching 'dune'."}
+    ```
+
+    The log line is nowhere in it. Logging is for **you**, the person operating the server. The model
+    never sees it. If the model should read something, `return` it.
+
+## Where it goes
+
+For a **stdio** server this question matters more than usual. The host launched your server as a subprocess and is reading MCP messages from its **stdout**. Standard error is yours.
+
+The standard library already does the right thing: log output goes to `sys.stderr` by default. Your `logger.info(...)` lines land in the terminal (or wherever the host collects the subprocess's stderr), and the protocol stream stays clean.
+
+!!! tip
+    Don't `print()` in a stdio server. `print` writes to **stdout**, and stdout belongs to the protocol.
+    While serving, the SDK diverts stdout that is actually *flushed* to stderr, so it can't corrupt the
+    wire, but a `print()` in a block-buffered process usually sits unflushed in `sys.stdout`'s buffer
+    until the interpreter drains it at exit, straight onto the protocol stream. Even when it is diverted,
+    the line lands raw among the log output, with no level, no logger name, and no way to filter it.
+
+    `logger.debug("got here")` is the same one line of effort and goes to the right place.
+
+## The level
+
+You don't have to call `logging.basicConfig()` yourself. Constructing an `MCPServer` already did, with a handler pointed at standard error, at the level you pass as `log_level=`, so `MCPServer("Bookshop", log_level="DEBUG")` is all it takes to see your `logger.debug(...)` lines.
+
+The default is `"INFO"`.
+
+`logging.basicConfig()` never replaces handlers that already exist. If you configure logging yourself before creating the server, your configuration wins.
+
+You also don't need a `try`/`except` in every handler just to record failures. When a tool or resource function raises, the SDK logs it for you. **[Handling errors](https://py.sdk.modelcontextprotocol.io/servers/handling-errors/index.md#any-other-exception)** explains what gets logged and at which level.
+
+## Try it
+
+Run the server with the MCP Inspector:
+
+```console
+uv run mcp dev server.py
+```
+
+Call `search_books` from the **Tools** tab. The Inspector shows you the result: only the return value. The line
+
+```text
+Searching for 'dune'
+```
+
+went to standard error: the terminal, not the wire.
+
+!!! info
+    If what you actually want is *tracing* (every request, how long it took, whether it failed), you
+    don't want log lines, you want spans. Your server already emits them: the SDK traces every
+    message with OpenTelemetry out of the box. See **[OpenTelemetry](https://py.sdk.modelcontextprotocol.io/run/opentelemetry/index.md)**.
+
+## Recap
+
+* The MCP protocol's logging capability is deprecated by the 2026-07-28 spec and not replaced. Don't build on it.
+* `logger = logging.getLogger(__name__)` at module level, `logger.info(...)` in the tool. That's the whole pattern.
+* Log output never reaches the model. Only the value you `return` does.
+* Standard error is yours; stdout belongs to the protocol. The SDK diverts flushed stray stdout to stderr while serving, but an unflushed `print()` can still drain onto the wire at exit, and diverted lines arrive unlabeled; use `logging`, whose handler flushes every record.
+* `MCPServer(..., log_level="DEBUG")` sets the level, and a logging configuration you made first is left alone.
+
+Telling connected clients that something on your server changed (the tool list, a resource) is **[Subscriptions](https://py.sdk.modelcontextprotocol.io/handlers/subscriptions/index.md)**.
+
+# Subscriptions
+
+Source: https://py.sdk.modelcontextprotocol.io/handlers/subscriptions/
+
+A server's catalog is not fixed. Tools appear at runtime, and the content behind a resource URI changes.
+
+**Subscriptions** are how a client hears about it. The client sends one `subscriptions/listen` request, and the response to that request *is* the stream: it stays open and carries the change notifications the client asked for.
+
+## Publish it from the tool
+
+Your side of it is one line: publish the change.
+
+```python title="server.py" hl_lines="20 32"
+# docs_src/subscriptions/tutorial001.py
+from mcp.server.mcpserver import Context, MCPServer
+
+mcp = MCPServer("Sprint Board")
+
+BOARDS = {
+    "sprint": {"design": False, "build": False, "ship": False},
+    "backlog": {"tidy docs": False},
+}
+
+
+@mcp.resource("board://{name}")
+def board(name: str) -> str:
+    tasks = BOARDS[name]
+    return "\n".join(f"[{'x' if done else ' '}] {task}" for task, done in tasks.items())
+
+
+@mcp.tool()
+async def complete_task(board: str, task: str, ctx: Context) -> str:
+    BOARDS[board][task] = True
+    await ctx.notify_resource_updated(f"board://{board}")
+    return f"{task}: done"
+
+
+def sprint_report() -> str:
+    done = sum(done for tasks in BOARDS.values() for done in tasks.values())
+    return f"{done} task(s) done"
+
+
+@mcp.tool()
+async def enable_reports(ctx: Context) -> str:
+    mcp.add_tool(sprint_report)
+    await ctx.notify_tools_changed()
+    return "reporting is live"
+```
+
+* `await ctx.notify_resource_updated("board://sprint")` reaches every open stream that subscribed to that URI. Nobody else.
+* `await ctx.notify_tools_changed()` reaches every stream that asked for tool-list changes. A client that receives it calls `tools/list` again, and now sees `sprint_report`.
+* The siblings are `notify_prompts_changed()` and `notify_resources_changed()`.
+* No subscribers, no work. Publishing to an idle server is a no-op, so you never check whether anyone is listening. You state what changed.
+
+`MCPServer` serves `subscriptions/listen` for you. The wire obligations (the acknowledgment as the first frame, per-stream filtering, the subscription id on every frame) are the SDK's job.
+
+!!! check
+    On the wire, a stream whose filter named `board://sprint` looks like this after `complete_task` runs:
+
+    ```json
+    {"method": "notifications/subscriptions/acknowledged",
+     "params": {"notifications": {"resourceSubscriptions": ["board://sprint"]}, "_meta": {"io.modelcontextprotocol/subscriptionId": "listen-1"}}}
+
+    {"method": "notifications/resources/updated",
+     "params": {"uri": "board://sprint", "_meta": {"io.modelcontextprotocol/subscriptionId": "listen-1"}}}
+    ```
+
+    Note what the update does *not* carry: the board. Every frame carries the listen request's JSON-RPC id under `_meta`, and that id is the subscription id. The client mints it: the Python `Client` uses strings like `"listen-1"`; other clients may use integers.
+
+## Only what was asked for
+
+The filter is a contract. A stream that requested tool-list changes and one resource URI receives those two kinds and nothing else. Publish a prompt change and that stream stays silent.
+
+`MCPServer` matches resource URIs as exact strings, so a stream that named `board://sprint` hears nothing about `board://sprint/tasks/1`. The spec lets a server report a change on a sub-resource of a subscribed URI; `MCPServer` never does, but clients are built to expect it.
+
+Two things the stream is *not*:
+
+* **It is not a replay log.** A dropped stream is gone, and events published while nobody was connected are not queued. Clients re-listen and refetch.
+* **It is not the 2025 path.** Clients that called `resources/subscribe` are served by `ctx.session.send_resource_updated(uri)`. The `notify_*` methods reach `subscriptions/listen` streams only.
+
+## Deciding who may watch
+
+By default every requested kind and URI is honored: any caller may watch any URI you publish. Nothing consults your read handler, because nobody is reading — a caller your `files://{name}` handler would turn away can still open a stream on `files://payroll.csv` and learn that it changed, and when. It never learns content, and it cannot probe what exists, because an unknown URI is honored too and simply never fires. Narrow but real, so gate it before you publish per-user URIs from a multi-tenant server.
+
+The gate is a middleware. It sees the `subscriptions/listen` request before the SDK acknowledges it and refuses when the caller asks for anything they may not read:
+
+```python title="server.py" hl_lines="19-26 29"
+# docs_src/subscriptions/tutorial006.py
+from mcp_types import INVALID_REQUEST, SubscriptionsListenRequestParams
+
+from mcp.server.auth.middleware.auth_context import get_access_token
+from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
+from mcp.server.mcpserver import MCPServer
+from mcp.shared.exceptions import MCPError
+
+# Who may see each file. Replace this table with a database or your RBAC system.
+ACCESS = {
+    "files://report.pdf": {"alice", "bob"},
+    "files://payroll.csv": {"carol"},
+}
+
+
+def can_access(user: str | None, uri: str) -> bool:
+    return user is not None and user in ACCESS.get(uri, set())
+
+
+async def gate_subscriptions(ctx: ServerRequestContext, call_next: CallNext) -> HandlerResult:
+    if ctx.method == "subscriptions/listen":
+        params = SubscriptionsListenRequestParams.model_validate(ctx.params or {}, by_name=False)
+        token = get_access_token()
+        user = token.subject if token else None
+        if not all(can_access(user, uri) for uri in params.notifications.resource_subscriptions or ()):
+            raise MCPError(INVALID_REQUEST, "not permitted to watch the requested resources")
+    return await call_next(ctx)
+
+
+mcp = MCPServer("Reports", middleware=[gate_subscriptions])
+
+
+@mcp.resource("files://{name}")
+def file(name: str) -> str:
+    uri = f"files://{name}"
+    token = get_access_token()
+    if not can_access(token.subject if token else None, uri):
+        raise MCPError(INVALID_REQUEST, f"Unknown resource: {uri}")
+    return f"contents of {name}"
+```
+
+* `ctx.params` is the raw request, so the middleware validates it into `SubscriptionsListenRequestParams` itself and reads the filter the client asked for.
+* Refusal is a raised `MCPError` before `call_next(ctx)`: the client gets that error and no stream, and the connection carries on. Keep the message uniform, naming no URI, so a refusal never confirms which URIs are protected.
+* One `can_access(user, uri)` answers both questions. The resource handler asks it on `resources/read`; the middleware asks it on `subscriptions/listen`. Swap the table for a database or your RBAC system and both stay in step.
+* The decision holds for the stream's lifetime. There is no per-event re-check, so if a caller's access can lapse mid-stream (an expiring token), end that caller's connection when it does.
+
+The full middleware contract, including what else it wraps and why it is marked provisional, is on **[Middleware](https://py.sdk.modelcontextprotocol.io/advanced/middleware/index.md)**.
+
+## The client end
+
+Here is a client on the other side of that stream, following the board:
+
+```python title="client.py" hl_lines="15"
+# docs_src/subscriptions/tutorial003.py
+from mcp import Client
+from mcp.client.subscriptions import ResourceUpdated, ToolsListChanged
+from mcp.types import TextResourceContents
+
+BOARD = "board://sprint"
+
+
+async def read_board(client: Client, uri: str = BOARD) -> str:
+    [contents] = (await client.read_resource(uri)).contents
+    assert isinstance(contents, TextResourceContents)
+    return contents.text
+
+
+async def follow_board(client: Client) -> None:
+    async with client.listen(tools_list_changed=True, resource_subscriptions=[BOARD]) as sub:
+        async for event in sub:
+            match event:
+                case ResourceUpdated(uri=uri):
+                    print(await read_board(client, uri))
+                case ToolsListChanged():
+                    tools = await client.list_tools()
+                    print("tools:", [tool.name for tool in tools.tools])
+                case _:
+                    pass  # kinds the filter did not ask for never arrive
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        await follow_board(client)
+```
+
+Entering `client.listen(...)` sends the request and waits for your acknowledgment, so the stream is live when the block starts, and each typed event is a cue to refetch, never a payload. That is the whole contract in one screen. Everything else about the client end lives on its own page: watching beside a main flow, stream endings, and re-listening. See **[Subscriptions](https://py.sdk.modelcontextprotocol.io/client/subscriptions/index.md)** under *Clients*.
+
+## Scaling past one process
+
+Publishes travel from your handler to the open streams over a `SubscriptionBus`. The default is in-memory: one process, every stream in it. That is the right answer until you run replicas behind a load balancer, because then a client's stream is pinned to one replica, and a publish on another replica has to reach it.
+
+That seam is yours to implement: two methods over your pub/sub backend.
+
+```python
+from collections.abc import Callable
+
+from redis.asyncio import Redis
+
+from mcp.server.mcpserver import MCPServer
+from mcp.server.subscriptions import ServerEvent  # SubscriptionBus is a Protocol: no base class
+
+
+class RedisSubscriptionBus:
+    def __init__(self, redis: Redis) -> None:
+        self._redis = redis
+        self._listeners: dict[object, Callable[[ServerEvent], None]] = {}
+
+    async def publish(self, event: ServerEvent) -> None:
+        await self._redis.publish("mcp-events", encode(event))  # to every replica
+
+    def subscribe(self, listener: Callable[[ServerEvent], None]) -> Callable[[], None]:
+        token = object()
+        self._listeners[token] = listener
+
+        def unsubscribe() -> None:
+            self._listeners.pop(token, None)
+
+        return unsubscribe
+
+
+mcp = MCPServer("Sprint Board", subscriptions=RedisSubscriptionBus(redis))
+```
+
+`encode` is yours, and so is the reader task on each replica that decodes arriving messages and calls every registered listener. Listeners are synchronous, must not raise, and run on the server's event loop.
+
+The bus carries typed `ServerEvent` values, four small dataclasses, never JSON-RPC. Stamping, filtering, and stream lifecycles stay in the SDK, so a bus implementation cannot break the protocol. It can only move events between processes.
+
+To publish from outside a request, construct the bus yourself so you hold the reference. `MCPServer` builds one internally when you pass nothing, and does not expose it.
+
+```python
+from mcp.server.subscriptions import InMemorySubscriptionBus, ToolsListChanged
+
+bus = InMemorySubscriptionBus()
+mcp = MCPServer("Sprint Board", subscriptions=bus)
+
+
+async def tools_reloaded() -> None:
+    await bus.publish(ToolsListChanged())  # from a lifespan task, a webhook, anywhere
+```
+
+## The low-level composition
+
+Down on the low-level `Server` there is no pre-wired anything, and the same parts assemble in three lines:
+
+```python title="server.py" hl_lines="8-9 47"
+# docs_src/subscriptions/tutorial002.py
+from typing import Any
+
+import mcp.types as types
+from mcp.server.context import ServerRequestContext
+from mcp.server.lowlevel import Server
+from mcp.server.subscriptions import InMemorySubscriptionBus, ListenHandler, ResourceUpdated
+
+bus = InMemorySubscriptionBus()
+listen_handler = ListenHandler(bus)
+
+BOARD = {"design": False, "build": False}
+
+COMPLETE_TASK_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"task": {"type": "string"}},
+    "required": ["task"],
+}
+
+
+async def read_resource(
+    ctx: ServerRequestContext[Any], params: types.ReadResourceRequestParams
+) -> types.ReadResourceResult:
+    board = "\n".join(f"[{'x' if done else ' '}] {task}" for task, done in BOARD.items())
+    return types.ReadResourceResult(contents=[types.TextResourceContents(uri=params.uri, text=board)])
+
+
+async def list_tools(
+    ctx: ServerRequestContext[Any], params: types.PaginatedRequestParams | None
+) -> types.ListToolsResult:
+    return types.ListToolsResult(
+        tools=[types.Tool(name="complete_task", description="Mark a task done.", input_schema=COMPLETE_TASK_SCHEMA)]
+    )
+
+
+async def call_tool(ctx: ServerRequestContext[Any], params: types.CallToolRequestParams) -> types.CallToolResult:
+    args = params.arguments or {}
+    BOARD[args["task"]] = True
+    await bus.publish(ResourceUpdated(uri="board://sprint"))
+    return types.CallToolResult(content=[types.TextContent(type="text", text="done")])
+
+
+server = Server(
+    "sprint-board",
+    on_read_resource=read_resource,
+    on_list_tools=list_tools,
+    on_call_tool=call_tool,
+    on_subscriptions_listen=listen_handler,
+)
+```
+
+* You own the bus, so you publish to it directly: `await bus.publish(ResourceUpdated(uri=...))`. Put it wherever your handlers can reach it: module scope here, the lifespan in a bigger app.
+* `ListenHandler(bus)` is the same handler `MCPServer` registers, and `on_subscriptions_listen=` is an ordinary handler slot. Put your own callable in that slot for different semantics, and the spec obligations move to you: acknowledge first, stamp every frame with the subscription id, deliver nothing outside the filter.
+* `ListenHandler.close()` ends every open stream gracefully. Each one receives the listen request's result as its final frame, which is the spec's way of saying the server ended the subscription deliberately. It returns before those streams finish flushing, so give them a moment before you tear the transport down. Without it, streams end when the client disconnects.
+
+## Recap
+
+* A client opts in with one `subscriptions/listen` request, and the response is the stream. Serving it is built in.
+* You publish with `ctx.notify_*`, and the SDK does the stamping, filtering, and lifecycle work.
+* Events are cues, not payloads. Both ends refetch.
+* The client end is `async with client.listen(...)`: **[Subscriptions](https://py.sdk.modelcontextprotocol.io/client/subscriptions/index.md)** under *Clients* is that story.
+* On the low-level `Server` you assemble the same parts yourself: a bus, `ListenHandler(bus)`, the `on_subscriptions_listen` slot.
+* Scaling out means implementing `SubscriptionBus`, two methods, and passing it as `MCPServer(subscriptions=...)`.
+
+Running the server that serves all this, behind one replica or twenty, is **[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)**.
+
+# Running your server
+
+Source: https://py.sdk.modelcontextprotocol.io/run/
+
+`mcp.run()` starts the server.
+
+The only decision you make is the **transport**: how the bytes between your server and its client actually move.
+
+## Pick a transport
+
+| Transport | What it is | When |
+|---|---|---|
+| `stdio` | The host launches your file as a subprocess and speaks over its stdin and stdout. | Local servers. The default. |
+| `streamable-http` | A real HTTP server listening on a port. | Anything you deploy. |
+| `sse` | The older HTTP transport. | You don't. |
+
+!!! warning
+    SSE was superseded by Streamable HTTP in the 2025-03-26 protocol revision.
+    `mcp.run(transport="sse")` still works, with its own `sse_path=` and `message_path=`
+    options, but it exists for clients that haven't moved. Don't build anything new on it.
+
+## `mcp.run()`
+
+```python title="server.py" hl_lines="12-13"
+# docs_src/run/tutorial001.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.tool()
+def search_books(query: str) -> str:
+    """Search the catalog by title or author."""
+    return f"Found 3 books matching {query!r}."
+
+
+if __name__ == "__main__":
+    mcp.run()
+```
+
+* `run()` is synchronous. It blocks for the life of the server.
+* With no argument, the transport is `stdio`.
+* It sits under `if __name__ == "__main__":` because everything that loads your server (`mcp dev`, `mcp run`, `mcp install`, your tests) **imports** this file. The guard keeps an import from turning into a running server.
+
+### stdio
+
+There is nothing to configure. The host starts your file as a child process, writes requests to its stdin, and reads responses from its stdout.
+
+Run it yourself and you see the consequence:
+
+```console
+python server.py
+```
+
+Nothing prints, and it doesn't return. It is waiting on stdin for a host to speak first.
+
+That also means stdout **is the wire**. While serving, the SDK moves the wire to a private descriptor and diverts output that is *flushed* to stdout (a subprocess writing to its inherited stdout, a flushed `print()`) to stderr, where it can't corrupt the stream. Output flushed to stdout *before* serving begins (a wrapper script echoing, an unbuffered import-time print) still lands on the wire, and so does a `print()` that stays buffered until the interpreter drains it at exit. For output you actually want, the `logging` module is the right tool: its handler flushes each record to stderr as it happens. That story is in **[Logging](https://py.sdk.modelcontextprotocol.io/handlers/logging/index.md)**.
+
+### Try it
+
+```console
+uv run mcp dev server.py
+```
+
+The Inspector does exactly what a real host does: it launches `server.py` as a subprocess and connects to it over stdio.
+
+You never gave it a port. There isn't one.
+
+## Streamable HTTP
+
+To put the same server on a port instead, name the transport (and its options) in `run()`:
+
+```python title="server.py" hl_lines="13"
+# docs_src/run/tutorial002.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.tool()
+def search_books(query: str) -> str:
+    """Search the catalog by title or author."""
+    return f"Found 3 books matching {query!r}."
+
+
+if __name__ == "__main__":
+    mcp.run(transport="streamable-http", port=3001)
+```
+
+That one line builds a Starlette app and serves it with uvicorn. Clients connect to `http://127.0.0.1:3001/mcp`.
+
+Each transport has its own keyword arguments, all on `run()`:
+
+* `host` / `port`: where to listen. Defaults `127.0.0.1` and `8000`.
+* `streamable_http_path`: where the MCP endpoint lives. Default `/mcp`.
+* `json_response=True`: answer each POST with a single JSON body instead of an SSE stream. That body has room for the response and nothing else, so a tool that calls back into the client mid-request (`ctx.elicit()`, sampling) raises `NoBackChannelError` on this leg, and notifications tied to the in-flight call (progress from `ctx.report_progress()`, per-call log messages) are dropped; the standalone `GET` stream still carries unrelated ones.
+* `stateless_http=True`: a fresh transport per request, no session tracking.
+* `max_request_body_size`: largest accepted request body in bytes. Defaults to 4 MiB; larger requests
+  receive HTTP 413 before parsing or session creation. Raise it only when legitimate MCP messages
+  exceed that size.
+* `session_idle_timeout`: seconds a legacy session may sit with nothing in flight before the
+  server closes it. Default 1800. `None` disables it. See
+  [Session lifetime and limits](https://py.sdk.modelcontextprotocol.io/run/legacy-clients/index.md#session-lifetime-and-limits).
+* `max_sessions`: how many legacy sessions one process holds at once. Default 10 000. `None`
+  removes the limit. Covered in the same section.
+* `event_store`, `retry_interval`, `transport_security`: resumability and DNS-rebinding protection. They can wait, until you deploy somewhere other than localhost; **[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)** covers `transport_security`.
+
+!!! warning
+    Transport options go to `run()`, **not** to `MCPServer(...)`. The constructor describes what
+    your server *is*: name, version, instructions. `run()` describes how it is served. Get it
+    backwards and Python answers before MCP is even involved:
+
+    ```text
+    TypeError: MCPServer.__init__() got an unexpected keyword argument 'port'
+    ```
+
+`run()` is the short road. The moment you need more (your server mounted inside an existing app, two servers in one process, CORS for browser clients), you build the ASGI app yourself and hand it to any ASGI host. That is **[Add to an existing app](https://py.sdk.modelcontextprotocol.io/run/asgi/index.md)**.
+
+## Server settings
+
+A couple of things about running are not about the transport. They are constructor arguments:
+
+```python title="server.py" hl_lines="3"
+# docs_src/run/tutorial003.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Bookshop", log_level="DEBUG")
+
+
+@mcp.tool()
+def search_books(query: str) -> str:
+    """Search the catalog by title or author."""
+    return f"Found 3 books matching {query!r}."
+
+
+if __name__ == "__main__":
+    mcp.run()
+```
+
+* `log_level`: handed to `logging.basicConfig()` the moment `MCPServer(...)` is constructed. That configures the **root** logger, so it sets the level for your own loggers too, not just the SDK's. Default `"INFO"`.
+* `debug`: forwarded to the Starlette app that the HTTP transports build. Default `False`.
+
+Both land on `mcp.settings`, which you can read back at runtime.
+
+## The `mcp` command
+
+The `[cli]` extra installs a small command-line tool around all of this.
+
+`mcp dev` runs your server under the **MCP Inspector**:
+
+```console
+uv run mcp dev server.py
+uv run mcp dev server.py --with pandas --with numpy
+uv run mcp dev server.py --with-editable .
+```
+
+`--with` adds packages to the environment it builds; `--with-editable` installs your own package into it. It needs `npx` on your `PATH`: the Inspector is a Node.js app.
+
+`mcp run` imports the file, finds the server object (a module-level `mcp`, `server`, or `app`), and calls `run()` on it:
+
+```console
+uv run mcp run server.py
+uv run mcp run server.py:bookshop
+```
+
+The `:` suffix names the object when it isn't called `mcp`, `server`, or `app`.
+
+Your `if __name__ == "__main__":` block never executes here: `mcp run` calls `run()` itself, and the only option it forwards is `--transport`.
+
+`mcp install` registers the server with **Claude Desktop**, so the app launches it for you:
+
+```console
+uv run mcp install server.py --name "Bookshop"
+uv run mcp install server.py -v API_KEY=abc123 -f .env
+```
+
+`-v KEY=VALUE` and `-f .env` record environment variables in that entry. Claude Desktop starts your server in its own process. Your shell's environment is not there.
+
+Claude Desktop is the only host `mcp install` knows. Every other host (Claude Code, Cursor, VS Code) takes the same launch command in its own config file, and **[Connect to a real host](https://py.sdk.modelcontextprotocol.io/get-started/real-host/index.md)** has each one.
+
+`mcp version` prints the installed SDK version.
+
+!!! tip
+    `mcp dev` and `mcp run` only understand `MCPServer`. If you build with the low-level `Server`,
+    you run it yourself. See **[The low-level Server](https://py.sdk.modelcontextprotocol.io/advanced/low-level-server/index.md)**.
+
+## Recap
+
+* A **transport** is how bytes reach your server: `stdio` for a local subprocess, `streamable-http` for a port. SSE is superseded.
+* `mcp.run()` picks the transport. With no argument it is `stdio`, and it blocks.
+* Every transport option (`host`, `port`, `streamable_http_path`, ...) is an argument to `run()`, never to `MCPServer(...)`.
+* Keep `run()` under `if __name__ == "__main__":`. Everything that loads your server imports the file first.
+* `log_level=` and `debug=` are constructor arguments; they land on `mcp.settings`.
+* `mcp dev` for the Inspector, `mcp run` to execute a file, `mcp install` for Claude Desktop, `mcp version` for the version.
+* The transport never changes what your server *is*: all three files on this page expose the identical tool.
+
+When `run()` itself is the limit (your server inside an app that already exists), it is **[Add to an existing app](https://py.sdk.modelcontextprotocol.io/run/asgi/index.md)**. A real hostname and more than one worker is **[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)**. And if some of your clients are still on spec version 2025-11-25 or earlier, **[Serving legacy clients](https://py.sdk.modelcontextprotocol.io/run/legacy-clients/index.md)** is the good news.
+
+# Add to an existing app
+
+Source: https://py.sdk.modelcontextprotocol.io/run/asgi/
+
+`mcp.run("streamable-http")` starts a web server for you. Sometimes you don't want that: your MCP server is one piece of a larger web application, or you already have an ASGI deployment.
+
+For that, `mcp.streamable_http_app()` returns a **Starlette application**.
+
+A Starlette app is an ASGI app, so anything that hosts ASGI (uvicorn, Hypercorn, another Starlette, FastAPI) can host your MCP server.
+
+## The app
+
+```python title="server.py" hl_lines="12"
+# docs_src/asgi/tutorial001.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Notes")
+
+
+@mcp.tool()
+def add_note(text: str) -> str:
+    """Save a note."""
+    return f"Saved: {text}"
+
+
+app = mcp.streamable_http_app()
+```
+
+`app` is an ordinary ASGI application. Hand it to any ASGI server:
+
+```console
+uvicorn server:app
+```
+
+The MCP endpoint is at `/mcp`, so a client connects to `http://127.0.0.1:8000/mcp`.
+
+The app already carries two things:
+
+* One route, `/mcp`: the Streamable HTTP endpoint.
+* A **lifespan** that starts `mcp.session_manager`, the object that owns every live session's background work.
+
+Run the app on its own (`uvicorn server:app`) and you never think about either.
+
+!!! tip
+    `streamable_http_app()` takes the same keyword arguments as `mcp.run("streamable-http", ...)`,
+    minus `port`: the port belongs to whatever serves the app. `host` is still accepted but binds
+    nothing here; **[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)** explains what it actually controls.
+    **[Running your server](https://py.sdk.modelcontextprotocol.io/run/index.md)** covers the options themselves.
+
+`mcp.sse_app()` does the same for the superseded SSE transport.
+
+## Localhost only, until you say otherwise
+
+Out of the box the app answers **only** requests addressed to localhost. `streamable_http_app()`
+cannot know which hostname it will be served behind, so it arms DNS-rebinding protection with the
+safest possible allowlist; on your machine that is exactly right. Deployed behind a real hostname,
+it means **every request is rejected with `421 Misdirected Request`** until you pass
+`transport_security=` an allowlist of what you actually serve. Nothing you built is even
+consulted first. That allowlist, and everything else between a working app and a real hostname,
+is **[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)**.
+
+## Mounting it
+
+The moment the MCP server is *part* of a bigger application, you put the app inside a `Mount`. And the moment you do that, the lifespan becomes your problem:
+
+```python title="server.py" hl_lines="18-21 25-26"
+# docs_src/asgi/tutorial002.py
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from starlette.applications import Starlette
+from starlette.routing import Mount
+
+from mcp.server import MCPServer
+
+mcp = MCPServer("Notes")
+
+
+@mcp.tool()
+def add_note(text: str) -> str:
+    """Save a note."""
+    return f"Saved: {text}"
+
+
+@asynccontextmanager
+async def lifespan(app: Starlette) -> AsyncIterator[None]:
+    async with mcp.session_manager.run():
+        yield
+
+
+app = Starlette(
+    routes=[Mount("/", app=mcp.streamable_http_app())],
+    lifespan=lifespan,
+)
+```
+
+* `Mount("/", ...)` plus the default `/mcp` path keeps the endpoint at `/mcp`. Starlette tries routes in order and `Mount("/")` matches **every** path, so your own routes go *before* it in the list. Anything after it is unreachable.
+* The `lifespan` function enters `mcp.session_manager.run()` for the lifetime of the **host** app. This is the line everyone forgets.
+* `mcp.session_manager` only exists *after* `streamable_http_app()` has been called. That is why the routes are built at module level and the manager is only touched inside the lifespan.
+
+Starlette's `Host` route works the same way: swap `Mount("/", ...)` for `Host("mcp.example.com", ...)` to route by hostname instead of by path. The lifespan rule does not change, and neither does the transport-security one. A `Host("mcp.example.com", ...)` route only ever receives requests addressed to that hostname, but the transport's own Host allowlist (**[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)**) still runs first. Without `"mcp.example.com"` in it, that route answers every one of them with a `421`.
+
+!!! warning "The host app owns the lifespan"
+    `streamable_http_app()` wires `session_manager.run()` into the lifespan of the Starlette it
+    returns, but **a mounted sub-application's lifespan never runs**. Mount the app and that
+    built-in lifespan is dead code. Whichever app sits at the top of your ASGI stack must enter
+    `mcp.session_manager.run()` in its own lifespan.
+
+!!! check
+    Delete the `lifespan=lifespan` line and start the server. It starts. The route resolves.
+    Then the first request to `/mcp` fails with:
+
+    ```text
+    RuntimeError: Task group is not initialized. Make sure to use run().
+    ```
+
+    Nothing starts the session manager except its `run()`.
+
+## Two servers, one app
+
+Each `MCPServer` is its own app with its own session manager. Mount as many as you like; enter every manager from the one host lifespan:
+
+```python title="server.py" hl_lines="27-30 35-36"
+# docs_src/asgi/tutorial003.py
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
+
+from starlette.applications import Starlette
+from starlette.routing import Mount
+
+from mcp.server import MCPServer
+
+notes = MCPServer("Notes")
+tasks = MCPServer("Tasks")
+
+
+@notes.tool()
+def add_note(text: str) -> str:
+    """Save a note."""
+    return f"Saved: {text}"
+
+
+@tasks.tool()
+def add_task(title: str) -> str:
+    """Create a task."""
+    return f"Created: {title}"
+
+
+@asynccontextmanager
+async def lifespan(app: Starlette) -> AsyncIterator[None]:
+    async with AsyncExitStack() as stack:
+        await stack.enter_async_context(notes.session_manager.run())
+        await stack.enter_async_context(tasks.session_manager.run())
+        yield
+
+
+app = Starlette(
+    routes=[
+        Mount("/notes", app=notes.streamable_http_app()),
+        Mount("/tasks", app=tasks.streamable_http_app()),
+    ],
+    lifespan=lifespan,
+)
+```
+
+* `AsyncExitStack` enters both managers; they start together and shut down in reverse order.
+* The endpoints are `/notes/mcp` and `/tasks/mcp`: the mount prefix plus the default path.
+
+## Changing the path
+
+That trailing `/mcp` is `streamable_http_path`. Set it to `"/"` and the mount prefix becomes the whole public path:
+
+```python title="server.py" hl_lines="25"
+# docs_src/asgi/tutorial004.py
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from starlette.applications import Starlette
+from starlette.routing import Mount
+
+from mcp.server import MCPServer
+
+mcp = MCPServer("Notes")
+
+
+@mcp.tool()
+def add_note(text: str) -> str:
+    """Save a note."""
+    return f"Saved: {text}"
+
+
+@asynccontextmanager
+async def lifespan(app: Starlette) -> AsyncIterator[None]:
+    async with mcp.session_manager.run():
+        yield
+
+
+app = Starlette(
+    routes=[Mount("/notes", app=mcp.streamable_http_app(streamable_http_path="/"))],
+    lifespan=lifespan,
+)
+```
+
+Now clients connect to `/notes/`, not `/notes/mcp`.
+
+## CORS for browser clients
+
+A browser-based client needs two permissions from you: to **send** its MCP request headers, and to **read** the one MCP sends back. Both are CORS configuration on the host app, and the transport-security allowlist above has to agree with it:
+
+```python title="server.py" hl_lines="27-30 33 35-49"
+# docs_src/asgi/tutorial005.py
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
+from starlette.routing import Mount
+
+from mcp.server import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
+
+mcp = MCPServer("Notes")
+
+
+@mcp.tool()
+def add_note(text: str) -> str:
+    """Save a note."""
+    return f"Saved: {text}"
+
+
+@asynccontextmanager
+async def lifespan(app: Starlette) -> AsyncIterator[None]:
+    async with mcp.session_manager.run():
+        yield
+
+
+security = TransportSecuritySettings(
+    allowed_hosts=["mcp.example.com", "mcp.example.com:*"],
+    allowed_origins=["https://app.example.com"],
+)
+
+app = Starlette(
+    routes=[Mount("/", app=mcp.streamable_http_app(transport_security=security))],
+    middleware=[
+        Middleware(
+            CORSMiddleware,
+            allow_origins=["https://app.example.com"],
+            allow_methods=["GET", "POST", "DELETE"],
+            allow_headers=[
+                "Authorization",
+                "Content-Type",
+                "Last-Event-ID",
+                "Mcp-Method",
+                "Mcp-Name",
+                "Mcp-Protocol-Version",
+                "Mcp-Session-Id",
+            ],
+            expose_headers=["Mcp-Session-Id"],
+        )
+    ],
+    lifespan=lifespan,
+)
+```
+
+* `allow_headers` is the half everyone forgets. A browser **preflights** every MCP request, because `Content-Type: application/json` and the `Mcp-*` request headers are not on the CORS safelist, and a header the preflight doesn't grant is a request the browser never sends. (`allow_headers=["*"]` also works: Starlette answers a preflight with whatever it asked for.)
+* `expose_headers=["Mcp-Session-Id"]` is the read half. Streamable HTTP returns the session ID in that response header, and browsers hide response headers from JavaScript unless CORS exposes them by name. Without it the client can never make its second request.
+* `allow_origins` is your decision, not MCP's. Be precise, and mirror it in `allowed_origins=` above: the browser enforces CORS, but the server checks `Origin` itself, and an origin the transport doesn't trust gets a `403` even after a clean preflight.
+* `allow_methods` lists the three methods Streamable HTTP uses: `POST` to send messages, `GET` to open the server-to-client stream, `DELETE` to end the session.
+
+## Custom routes
+
+`@mcp.custom_route()` registers a plain HTTP endpoint on the same app, for the things every deployed service needs that have nothing to do with MCP: a health check, an OAuth callback.
+
+```python title="server.py" hl_lines="15-17"
+# docs_src/asgi/tutorial006.py
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+
+from mcp.server import MCPServer
+
+mcp = MCPServer("Notes")
+
+
+@mcp.tool()
+def add_note(text: str) -> str:
+    """Save a note."""
+    return f"Saved: {text}"
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request: Request) -> Response:
+    return JSONResponse({"status": "ok"})
+
+
+app = mcp.streamable_http_app()
+```
+
+* The handler is plain Starlette: an `async` function from `Request` to `Response`.
+* `streamable_http_app()` picks up every custom route. `app.routes` is now `/mcp` and `/health`.
+* `GET /health` answers `{"status": "ok"}` with no MCP in sight.
+
+!!! warning
+    Custom routes are **never authenticated**, even when the rest of the server is. That is
+    deliberate: health checks and OAuth callbacks have to be reachable before any token exists.
+    Don't put anything private behind one.
+
+## Recap
+
+* `mcp.streamable_http_app()` returns a Starlette app with one route, `/mcp`. Any ASGI server can run it.
+* Out of the box the app answers only requests addressed to localhost, and behind a real hostname it rejects everything with a `421` until you pass `transport_security=` an allowlist. **[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)** owns that, and the rest of the road to production.
+* `Mount` (or `Host`) puts it inside a bigger Starlette or FastAPI app.
+* **Mounting disables the built-in lifespan.** The host app's lifespan must enter `mcp.session_manager.run()`, or the first request fails.
+* Several servers in one app means several mounts and one lifespan that enters every session manager.
+* `streamable_http_path="/"` moves the endpoint to the mount prefix itself.
+* Browser clients need CORS: `allow_headers` for the `Mcp-*` request headers, `expose_headers=["Mcp-Session-Id"]` for the response.
+* `@mcp.custom_route()` adds plain, unauthenticated HTTP endpoints next to `/mcp`.
+
+Once the server is reachable at a real URL, **[The Client](https://py.sdk.modelcontextprotocol.io/client/index.md)** connects to it with that URL.
+
+# Deploy & scale
+
+Source: https://py.sdk.modelcontextprotocol.io/run/deploy/
+
+Your server works. Now it needs a real hostname, and more than one worker behind it.
+
+Almost none of that is MCP's business. You bring the ASGI server, the process manager, the load balancer. What this page has is the short list of things that *are* MCP's business: one setting that gates every deployment, and the two places where "more than one worker" changes what the SDK does.
+
+## Before anything else: the Host allowlist
+
+`streamable_http_app()` cannot know which hostname it will be served behind, so it assumes the safest answer: localhost. With no `transport_security=`, the app switches on **DNS-rebinding protection** and accepts a request only if its `Host` header is `127.0.0.1:<port>`, `localhost:<port>`, or `[::1]:<port>`. The `Origin` header, when there is one, has to be the `http://` form of the same. On your machine that is exactly right: it stops a malicious web page from driving your local server through a DNS name it rebound to `127.0.0.1`.
+
+Deployed behind a real hostname, that same default rejects **every request** until you say otherwise. The check runs before anything MCP-shaped does, so nothing you built is even consulted:
+
+```text
+421 Misdirected Request    Invalid Host header      the Host is not in the allowlist
+403 Forbidden              Invalid Origin header    the Origin is not in the allowlist
+```
+
+`transport_security=` is the fix. Allowlist what you actually serve:
+
+```python title="server.py" hl_lines="2 13-17"
+# docs_src/deploy/tutorial001.py
+from mcp.server import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
+
+mcp = MCPServer("Notes")
+
+
+@mcp.tool()
+def add_note(text: str) -> str:
+    """Save a note."""
+    return f"Saved: {text}"
+
+
+security = TransportSecuritySettings(
+    allowed_hosts=["mcp.example.com", "mcp.example.com:*"],
+    allowed_origins=["https://app.example.com"],
+)
+app = mcp.streamable_http_app(transport_security=security)
+```
+
+* `allowed_hosts` entries are exact strings: `"mcp.example.com"` matches a bare `Host` header and `"mcp.example.com:*"` matches any port. List both.
+* `allowed_origins` only matters for browsers, because nothing else sends `Origin`. It is the server-side twin of the CORS configuration in **[Add to an existing app](https://py.sdk.modelcontextprotocol.io/run/asgi/index.md)**.
+* Behind a reverse proxy that already controls the `Host` header, switching the check off is the honest configuration: `TransportSecuritySettings(enable_dns_rebinding_protection=False)`.
+* Passing a non-localhost `host=` (for example `host="mcp.example.com"`) does **not** allowlist that hostname. It only stops the localhost default from arming the protection, which leaves every Host and Origin accepted. Say what you mean with `transport_security=` instead.
+
+!!! check
+    Delete the `transport_security=security` argument and deploy the app anyway. It starts, `/mcp`
+    routes, and every request (including from a plain `curl`) comes back:
+
+    ```text
+    HTTP/1.1 421 Misdirected Request
+
+    Invalid Host header
+    ```
+
+    You will not find those words on the client side. A `421` is a plain-text HTTP response, not a
+    JSON-RPC error, so the MCP client raises a generic transport error; the hostname it
+    didn't like appears only in the **server's** log, as a single warning. A freshly
+    deployed server that refuses every connection is a Host allowlist until proven otherwise.
+    **[Troubleshooting](https://py.sdk.modelcontextprotocol.io/troubleshooting/index.md)** starts here too.
+
+## Behind a TLS-terminating proxy
+
+If TLS ends at a proxy (an ingress, a load balancer, Caddy, nginx) and uvicorn serves plain HTTP behind it, tell uvicorn to trust the proxy's `X-Forwarded-*` headers:
+
+```console
+uvicorn server:app --proxy-headers --forwarded-allow-ips='<proxy address>'
+```
+
+Without that, the app believes it is being served over `http://`, and any redirect it issues (the usual one is `/mcp` → `/mcp/`) points at `http://…`. The Python client refuses to follow an HTTPS endpoint to plain HTTP and says so:
+
+```text
+MCPError: Redirect to http://mcp.example.com/mcp/ not followed: it would downgrade this HTTPS endpoint to plain HTTP.
+```
+
+The client-side stopgap is to configure the exact URL the server serves (`https://mcp.example.com/mcp/`, slash included) so no redirect happens. The fix is the flag above. `FORWARDED_ALLOW_IPS` is the environment-variable spelling; `*` trusts every hop, which is only right when nothing but the proxy can reach uvicorn.
+
+## Workers, and who has to be sticky
+
+Once the hostname answers, put more than one worker behind it. There is no SDK knob for that; you scale a Starlette app the way you scale any ASGI app, by handing the object to something that knows how to fork:
+
+```console
+uvicorn server:app --workers 4
+```
+
+Four processes, one socket. And now the question every deployment has to answer: **does a request have to reach the worker that saw the last one?**
+
+For a client speaking the **2026-07-28** protocol, no. A modern request is one self-contained POST: no `initialize` handshake before it, no `Mcp-Session-Id` on the response, nothing for a second request to come back *to*. Route it to any worker.
+
+That is not a mode you switch on. `stateless_http=True` looks like it should be, but the transport routes on the `MCP-Protocol-Version` request header, hands a modern request to the modern handler, and **returns**. The line that reads `stateless_http` comes *after* that return. It isn't that the flag is ignored on the 2026-07-28 path; it is never reached. `stateless_http` is a knob for the **legacy** leg only, and the modern path is sessionless by construction.
+
+For a legacy client on spec version 2025-11-25 or earlier, the answer depends on that flag:
+
+| Client's protocol version | Session | What the load balancer must do |
+| --- | --- | --- |
+| **2026-07-28** | None. `Mcp-Session-Id` is never set. | Nothing. Any worker serves any request. |
+| **2025-11-25 and earlier** (the default) | `Mcp-Session-Id`, held in one worker's memory. | **Sticky sessions.** A follow-up that reaches a different worker gets a `404` *"Session not found"*. |
+| **2025-11-25 and earlier**, with `stateless_http=True` | None. | Nothing. The cost is the server-to-client back-channel (sampling, push elicitation, `roots/list`) and resumability. |
+
+Sticky sessions and what the legacy leg costs are their own page, **[Serving legacy clients](https://py.sdk.modelcontextprotocol.io/run/legacy-clients/index.md)**; the two eras themselves are **[Protocol versions](https://py.sdk.modelcontextprotocol.io/protocol-versions/index.md)**. What matters here is the shape of the answer: *on 2026-07-28 you are already stateless, with nothing to configure.*
+
+The rest of this page is the two things that being stateless does **not** buy you.
+
+## `requestState` across workers
+
+A **[multi-round-trip](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)** tool needs something the client has to go get (a confirmation, a choice, a credential), so it returns a question instead of an answer and finishes on the retry. Between the two rounds the client holds an opaque `request_state` token the server minted. On the retry the server has to open that token again.
+
+*Sealed under what key?* By default, one the server generated with `os.urandom(32)` at construction time. Under `--workers 4` that is four constructions, in four processes: four different keys, never written anywhere, never shared, gone on restart.
+
+Here is a tool that asks before it acts, on a server that configures nothing:
+
+```python title="server.py" hl_lines="14 20"
+# docs_src/deploy/tutorial002.py
+from mcp.server.mcpserver import Context, MCPServer
+from mcp.types import ElicitRequest, ElicitRequestFormParams, ElicitResult, InputRequiredResult
+
+CONFIRM = ElicitRequest(
+    params=ElicitRequestFormParams(
+        message="Issue this refund?",
+        requested_schema={"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]},
+    )
+)
+
+
+def make_server() -> MCPServer:
+    """Every worker process builds one of these, once, at import."""
+    mcp = MCPServer("billing")
+
+    @mcp.tool()
+    async def refund(amount: int, ctx: Context) -> str | InputRequiredResult:
+        """Refund an amount, once a human has confirmed it."""
+        if ctx.input_responses is None:
+            return InputRequiredResult(input_requests={"ok": CONFIRM}, request_state=f"refund:{amount}")
+        answer = (ctx.input_responses or {}).get("ok")
+        if not isinstance(answer, ElicitResult) or answer.action != "accept" or not (answer.content or {}).get("ok"):
+            return "refund cancelled"
+        return f"refunded ${amount}"
+
+    return mcp
+```
+
+The first round reaches worker A. Worker A seals `refund:120` under **its** key and returns the token. The client puts the question in front of a person, gets a yes, and retries. The retry is a brand-new HTTP request.
+
+!!! check
+    Let that retry reach worker B. B tries to unseal a token it did not mint, cannot, and refuses the
+    whole round. `refund` is never called; the client gets a JSON-RPC error:
+
+    ```json
+    {
+      "code": -32602,
+      "message": "Invalid or expired requestState",
+      "data": {"reason": "invalid_request_state"}
+    }
+    ```
+
+    That message is **frozen**. Expired, tampered with, replayed against different arguments, or (by
+    far the most common cause in a real deployment) sealed by a sibling worker: the client is told
+    the same thing every time, so the wire never reveals which check failed. The real reason is one
+    `WARNING` in the server's log:
+
+    ```text
+    requestState rejected on tools/call: unknown key
+    ```
+
+    A multi-round-trip tool that worked with one worker and started failing *some of the time* at
+    two is this. Both rounds still have to reach the same process, so it fails exactly as often as
+    your load balancer separates them.
+
+The two rounds are two independent HTTP requests, and several ordinary things separate them: a proxy that balances per request, a connection that dropped in between, a deploy or a restart, a client that persisted `request_state` and is resuming from a different process entirely (**[Driving the loop yourself](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md#driving-the-loop-yourself)**). Any of them is "a different worker".
+
+The fix is one argument. It has **two** halves.
+
+```python title="server.py" hl_lines="1 12 14"
+# docs_src/deploy/tutorial003.py
+from mcp.server.mcpserver import Context, MCPServer, RequestStateSecurity
+from mcp.types import ElicitRequest, ElicitRequestFormParams, ElicitResult, InputRequiredResult
+
+CONFIRM = ElicitRequest(
+    params=ElicitRequestFormParams(
+        message="Issue this refund?",
+        requested_schema={"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]},
+    )
+)
+
+
+def make_server(key: str) -> MCPServer:
+    """Every worker process: the same key, and the same name."""
+    mcp = MCPServer("billing", request_state_security=RequestStateSecurity(keys=[key]))
+
+    @mcp.tool()
+    async def refund(amount: int, ctx: Context) -> str | InputRequiredResult:
+        """Refund an amount, once a human has confirmed it."""
+        if ctx.input_responses is None:
+            return InputRequiredResult(input_requests={"ok": CONFIRM}, request_state=f"refund:{amount}")
+        answer = (ctx.input_responses or {}).get("ok")
+        if not isinstance(answer, ElicitResult) or answer.action != "accept" or not (answer.content or {}).get("ok"):
+            return "refund cancelled"
+        return f"refunded ${amount}"
+
+    return mcp
+```
+
+* **`keys=[...]`** is the half everyone finds. Give every instance the same secret (at least 32 bytes of it), and every instance can unseal what any sibling minted. `keys[0]` seals and every key in the list unseals, which is the rotation ring; **[Rotating keys](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md#rotating-keys)** is how you turn it without downtime.
+* **The server's name** is the half almost nobody finds, and the reason cross-instance retries still fail after you share the key. Every sealed token carries the server's `name` as an **audience claim**, checked strictly on the way back in. Two instances built from the same code have the same name and never notice it. Name them apart (`MCPServer(f"billing-{POD}")` reads like good observability hygiene), and every cross-instance retry is refused exactly as above, shared key or not. The log says `audience` instead of `unknown key`; the client cannot tell the difference.
+
+Mint the secret once and hand the same value to every instance. This is the command the SDK's own error message tells you to run if you pass it fewer than 32 bytes:
+
+```console
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+!!! warning "Same keys, *and* the same name"
+    A multi-instance deployment must share both. If per-instance names are load-bearing for you,
+    give the fleet one explicit audience instead: `RequestStateSecurity(keys=[...], audience="billing")`.
+    Every instance then mints and accepts under `"billing"` no matter what it is called.
+
+Everything else about the seal is **[Protecting `requestState`](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md#protecting-requeststate)**: what it binds, the per-round `ttl` (600 seconds by default), bringing your own codec, why the unconfigured default is exactly right on `stdio`. This page's whole contribution is a two-item checklist: *same keys, same name.*
+
+!!! info
+    You are on this path even if you have never typed `InputRequiredResult`. A tool whose parameters
+    use `Resolve(...)` (**[Dependencies](https://py.sdk.modelcontextprotocol.io/handlers/dependencies/index.md)**) is a multi-round-trip tool,
+    and the SDK mints and seals its `request_state` for it. Same default key, same failure across
+    workers, same fix.
+
+## Change notifications across replicas
+
+A client's `subscriptions/listen` stream is one long-lived response, so it is pinned to one replica for its whole life. A `ctx.notify_resource_updated(...)` published on a **different** replica has to reach it.
+
+The seam between the two is the `SubscriptionBus`. Whatever bus you give a server is the one every publish goes into and every open stream listens on, so hand the same bus to every replica:
+
+```python title="server.py" hl_lines="2 7 9"
+# docs_src/deploy/tutorial004.py
+from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.subscriptions import SubscriptionBus
+
+NOTES = {"todo": "buy milk"}
+
+
+def make_server(bus: SubscriptionBus) -> MCPServer:
+    """Every replica gets its own server object; all of them hold the same bus."""
+    mcp = MCPServer("Notebook", subscriptions=bus)
+
+    @mcp.resource("note://{name}")
+    def note(name: str) -> str:
+        """One note, by name."""
+        return NOTES[name]
+
+    @mcp.tool()
+    async def edit_note(name: str, text: str, ctx: Context) -> str:
+        """Replace a note's text."""
+        NOTES[name] = text
+        await ctx.notify_resource_updated(f"note://{name}")
+        return "saved"
+
+    return mcp
+```
+
+Nothing about the fan-out cares which server object a stream is attached to. Two servers holding one `InMemorySubscriptionBus` already behave this way: open a listen stream on one, `edit_note` on the other, and the stream hears about it. That in-memory bus only spans server objects inside one process, which makes it the model, not the deployment:
+
+* Across real processes, **the SDK ships no bus that can help you.** `SubscriptionBus` is a two-method `Protocol` (`publish` and `subscribe`) that you implement over your own pub/sub backend (Redis, NATS, whatever you already run) and pass as `MCPServer(subscriptions=...)`. **[Subscriptions](https://py.sdk.modelcontextprotocol.io/handlers/subscriptions/index.md#scaling-past-one-process)** has the sketch and the contract.
+* The bus carries four small typed events, never JSON-RPC. Acknowledgment, filtering, and stream lifecycle stay in the SDK, so your bus cannot break the protocol; it can only move events between processes.
+* Streams are **not** resumable and events are **not** replayed. Losing a replica drops its streams; the clients re-listen and re-fetch. There is no event store to share and nothing else to configure. This is the one place where scaling out is genuinely just more of the same.
+
+## What the SDK does not give you
+
+An `MCPServer` is a protocol implementation, not an application server. The deployment knobs you go looking for next are missing on purpose:
+
+* **No `workers=`.** `mcp.run("streamable-http")` starts exactly one uvicorn process, and that is all it will ever start. Multi-process is `streamable_http_app()` handed to whatever you already deploy ASGI with: `uvicorn --workers`, gunicorn, your platform's process manager. This page is deliberately not a tutorial for any of them; their documentation is better than a copy of it here would be.
+* **No health-check route.** `@mcp.custom_route("/health", methods=["GET"])` is the whole answer, and it is never authenticated even when the rest of the server is. That is right for a liveness probe, wrong for anything private. **[Add to an existing app](https://py.sdk.modelcontextprotocol.io/run/asgi/index.md#custom-routes)** shows one.
+* **No production settings object.** There is nowhere on `MCPServer` to write down timeouts, TLS, graceful shutdown, or connection limits, because none of those are its job. They belong to your ASGI server, and you configure them there. **[Running your server](https://py.sdk.modelcontextprotocol.io/run/index.md)** covers the handful of settings the constructor *does* take.
+* **No shipped `EventStore`, and on 2026-07-28 no use for one.** Resumability is a feature of the legacy stateful leg; a modern exchange is one POST, one response, and nothing to resume.
+
+## Recap
+
+* Out of the box the app answers only requests addressed to localhost. `transport_security=TransportSecuritySettings(allowed_hosts=[...], allowed_origins=[...])` is the go-live gate: until you pass it, every request behind a real hostname is a `421` and the reason is only in the server's log.
+* Behind a TLS-terminating proxy, run uvicorn with `--proxy-headers --forwarded-allow-ips=...`, or its redirects point at `http://` and the client refuses them.
+* On 2026-07-28 there is no session and nothing for a load balancer to be sticky on. `stateless_http=True` is a legacy-only knob because a modern request is routed and answered before that flag is ever read.
+* The default `requestState` key is `os.urandom(32)`, minted per process. A multi-round-trip retry that reaches a different worker fails with `-32602` *"Invalid or expired requestState"*.
+* The fix is `RequestStateSecurity(keys=[...])` **and** the same server name on every instance. The name is the token's default audience claim. Same keys, same name.
+* Change notifications cross replicas through one shared `SubscriptionBus`. The SDK's only implementation is in-process; the two-method `Protocol` over your own pub/sub is yours to write.
+* There is no `workers=`, no health route, no production settings object. Bring your own ASGI server.
+
+The other thing a real hostname needs in front of it is a token: **[Authorization](https://py.sdk.modelcontextprotocol.io/run/authorization/index.md)**.
+
+# Authorization
+
+Source: https://py.sdk.modelcontextprotocol.io/run/authorization/
+
+Over Streamable HTTP your MCP server is an ordinary web service, and you protect it the way you protect any web service: with OAuth 2.1 bearer tokens.
+
+In OAuth terms, your server is a **resource server**. It never signs anyone in and it never issues a token. It does one thing: look at the `Authorization` header on each request and decide whether the token in it is good.
+
+This page is the server side. A client that discovers your authorization server and fetches the token is **[OAuth clients](https://py.sdk.modelcontextprotocol.io/client/oauth-clients/index.md)**.
+
+## The three parties
+
+* The **authorization server** signs people in and issues access tokens. You don't write this. It's your identity provider (Auth0, Keycloak, Entra, your own).
+* The **resource server** is your MCP server. It verifies the token on every request.
+* The **client** discovers which authorization server you trust, gets a token from it, and sends it back to you as `Authorization: Bearer <token>`.
+
+That's the whole triangle. Everything on this page is the middle bullet.
+
+## A token verifier
+
+The SDK has no opinion about what a valid token looks like. You tell it, by implementing **`TokenVerifier`**:
+
+```python title="server.py" hl_lines="14-16 21-27"
+# docs_src/authorization/tutorial001.py
+from pydantic import AnyHttpUrl
+
+from mcp.server import MCPServer
+from mcp.server.auth.provider import AccessToken, TokenVerifier
+from mcp.server.auth.settings import AuthSettings
+
+RESOURCE = "http://127.0.0.1:8000/mcp"
+
+KNOWN_TOKENS = {
+    "alice-token": AccessToken(token="alice-token", client_id="alice", scopes=["notes:read"], resource=RESOURCE),
+}
+
+
+class StaticTokenVerifier(TokenVerifier):
+    async def verify_token(self, token: str) -> AccessToken | None:
+        return KNOWN_TOKENS.get(token)
+
+
+mcp = MCPServer(
+    "Notes",
+    token_verifier=StaticTokenVerifier(),
+    auth=AuthSettings(
+        issuer_url=AnyHttpUrl("https://auth.example.com"),
+        resource_server_url=AnyHttpUrl(RESOURCE),
+        required_scopes=["notes:read"],
+        validate_token_resource=True,
+    ),
+)
+
+
+@mcp.tool()
+def list_notes() -> list[str]:
+    """List every note in the notebook."""
+    return ["Buy milk", "Ship the release"]
+```
+
+* `TokenVerifier` is a protocol with one async method. `verify_token` gets the raw token from the `Authorization` header and returns an **`AccessToken`** if it's valid, `None` if it isn't. There is nothing else to implement.
+* This one looks the token up in a table; each entry records the resource it was issued for. A real one verifies a JWT signature or calls the authorization server's token-introspection endpoint, and reports who the token was issued for (its `aud`) in `AccessToken.resource`. That code is yours; the SDK only calls it.
+* `token_verifier=` and `auth=` always travel together. Pass one without the other and `MCPServer(...)` raises a `ValueError` before it ever serves a request.
+
+`AuthSettings` is the public face of your resource server:
+
+* `issuer_url`: the authorization server that issues your tokens.
+* `resource_server_url`: the public URL of this MCP endpoint. It names *which* resource a token is for, and it's where the discovery document lives.
+* `required_scopes`: every token must carry all of them.
+* `validate_token_resource`: refuse any token whose `AccessToken.resource` is not `resource_server_url`. Leaving it unset while `resource_server_url` is set warns (`MCPDeprecationWarning`) and behaves as `False`; 3.0 makes `True` the default for resource servers.
+  * Turn it on when your authorization server binds tokens to the `resource` the client requested, which MCP clients always send. Keep `resource_server_url` the exact URL clients connect to.
+  * Leave it off when your authorization server uses its own audience identifiers (an Auth0 API identifier, an Entra application ID) and check `aud` in your verifier instead, returning `None` for a token that isn't for this server.
+  * If `aud` is a list, put the entry that equals `resource_server_url` in `resource`.
+
+!!! tip
+    `examples/servers/simple-auth/` in the SDK repository has an `IntrospectionTokenVerifier` that calls
+    a real authorization server's [RFC 7662](https://datatracker.ietf.org/doc/html/rfc7662) endpoint. It's the shape most production verifiers take.
+
+## What you get over HTTP
+
+Authorization lives in HTTP headers, so it exists only on the HTTP transports. Run it on the one you deploy: `mcp.run(transport="streamable-http")` puts it on `http://127.0.0.1:8000/mcp`, and **[Running your server](https://py.sdk.modelcontextprotocol.io/run/index.md)** has the rest. The app now has two routes:
+
+```text
+/mcp
+/.well-known/oauth-protected-resource/mcp
+```
+
+You registered one tool. The second route is the SDK's.
+
+### Discovery
+
+`GET` that well-known path and you get **[RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728) Protected Resource Metadata**, built straight from your `AuthSettings`:
+
+```json
+{
+  "resource": "http://127.0.0.1:8000/mcp",
+  "authorization_servers": ["https://auth.example.com/"],
+  "scopes_supported": ["notes:read"],
+  "bearer_methods_supported": ["header"]
+}
+```
+
+This document is how a client that has never heard of your server finds its way in: it reads `authorization_servers` and goes there for a token. You wrote none of it.
+
+!!! check
+    Call `/mcp` with no token (or with one your verifier returned `None` for) and the request is
+    stopped at the door:
+
+    ```text
+    HTTP/1.1 401 Unauthorized
+    WWW-Authenticate: Bearer error="invalid_token", error_description="Authentication required", resource_metadata="http://127.0.0.1:8000/.well-known/oauth-protected-resource/mcp"
+
+    {"error": "invalid_token", "error_description": "Authentication required"}
+    ```
+
+    Nothing was parsed and no tool ran. And that `resource_metadata` pointer in `WWW-Authenticate` is
+    what makes discovery automatic: 401 -> metadata document -> authorization server -> token -> retry.
+
+!!! warning
+    None of this protects `stdio`. A pipe has no `Authorization` header, so `token_verifier` is never
+    consulted there. A `stdio` server's security boundary is the process that launched it. The same
+    goes for the in-memory `Client(mcp)` you use in tests: it connects straight to the server object
+    and skips the HTTP layer, authorization included.
+
+## The caller's identity
+
+Inside any handler, **`get_access_token()`** is the `AccessToken` your verifier returned for the current request:
+
+```python title="server.py" hl_lines="4 35-38"
+# docs_src/authorization/tutorial002.py
+from pydantic import AnyHttpUrl
+
+from mcp.server import MCPServer
+from mcp.server.auth.middleware.auth_context import get_access_token
+from mcp.server.auth.provider import AccessToken, TokenVerifier
+from mcp.server.auth.settings import AuthSettings
+
+RESOURCE = "http://127.0.0.1:8000/mcp"
+
+KNOWN_TOKENS = {
+    "alice-token": AccessToken(token="alice-token", client_id="alice", scopes=["notes:read"], resource=RESOURCE),
+}
+
+
+class StaticTokenVerifier(TokenVerifier):
+    async def verify_token(self, token: str) -> AccessToken | None:
+        return KNOWN_TOKENS.get(token)
+
+
+mcp = MCPServer(
+    "Notes",
+    token_verifier=StaticTokenVerifier(),
+    auth=AuthSettings(
+        issuer_url=AnyHttpUrl("https://auth.example.com"),
+        resource_server_url=AnyHttpUrl(RESOURCE),
+        required_scopes=["notes:read"],
+        validate_token_resource=True,
+    ),
+)
+
+
+@mcp.tool()
+def whoami() -> str:
+    """Report which OAuth client is calling."""
+    token = get_access_token()
+    if token is None:
+        return "anonymous"
+    return f"{token.client_id} (scopes: {', '.join(token.scopes)})"
+```
+
+* It works in tools, resources, and prompts, and there is nothing to pass around: the auth middleware stores it in a context variable per request.
+* You get back the **same object your verifier built**: `client_id`, `scopes`, `subject`, `expires_at`, and any extra `claims` you attached. That's the hook for per-tool rules: read the scopes and refuse.
+* Outside an authenticated HTTP request it returns `None`. In-memory and over `stdio` it is always `None`.
+
+Call `whoami` with `Authorization: Bearer alice-token` and the model reads:
+
+```text
+alice (scopes: notes:read)
+```
+
+## The half the SDK doesn't do
+
+The SDK gives you the resource-server half: verify, advertise, refuse. It does not give you a login page, a consent screen, or a token.
+
+To watch all three parties move, run `examples/servers/simple-auth/` from the SDK repository (a small authorization server and a resource server set up exactly like this page) and then point `examples/clients/simple-auth-client/` at it for the full discovery-and-token dance.
+
+!!! info
+    There is a second constructor argument, `auth_server_provider=`, that embeds a full authorization
+    server inside your MCP server. It predates the AS/RS separation that the MCP authorization spec
+    is built around. New servers should not reach for it.
+
+An authorization server can also accept an enterprise identity provider's signed assertion in place of a user clicking through a consent screen, and the SDK supports both sides of that exchange. The grant, and the client that presents it, is **[Identity assertion](https://py.sdk.modelcontextprotocol.io/client/identity-assertion/index.md)**.
+
+## Recap
+
+* Over Streamable HTTP your server is an OAuth 2.1 **resource server**: it verifies tokens, it never issues them.
+* `TokenVerifier` is the whole integration surface: one async method, token in, `AccessToken | None` out.
+* `token_verifier=` and `auth=AuthSettings(issuer_url=..., resource_server_url=..., required_scopes=[...])` always travel together.
+* The SDK publishes [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728) Protected Resource Metadata at `/.well-known/oauth-protected-resource/...` and answers unauthenticated requests with a 401 whose `WWW-Authenticate` header points at it. That is the entire discovery story.
+* `get_access_token()` in any handler is who's calling.
+* Authorization is an HTTP concern. `stdio` and the in-memory test client never see it.
+
+The client half (discovering your authorization server and fetching the token for you) is **[OAuth clients](https://py.sdk.modelcontextprotocol.io/client/oauth-clients/index.md)**. And a client that *asserts* an identity instead of asking a user for one is **[Identity assertion](https://py.sdk.modelcontextprotocol.io/client/identity-assertion/index.md)**.
+
+# OpenTelemetry
+
+Source: https://py.sdk.modelcontextprotocol.io/run/opentelemetry/
+
+Your server is already traced. You don't have to add anything.
+
+Every server you create emits an [OpenTelemetry](https://opentelemetry.io/) span for every
+message it handles. You didn't write that, and you don't import it. It is there the moment you
+call `MCPServer(...)`.
+
+```python title="server.py"
+# docs_src/opentelemetry/tutorial001.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.tool()
+def search_books(query: str) -> str:
+    """Search the catalog by title or author."""
+    return f"Found 3 books matching {query!r}."
+```
+
+That is a complete, traced server. Call `search_books` and a span is created for it. The same is
+true for the low-level `Server`: the tracing lives on both.
+
+## What you get
+
+Every inbound message becomes a `SERVER` span named after the method and its target. So a
+`tools/call` for `search_books` is the span `tools/call search_books`, and a bare `tools/list`
+is just `tools/list`.
+
+Each span carries a few attributes:
+
+* `mcp.method.name` and `mcp.protocol.version`, on every span.
+* `jsonrpc.request.id`, on a request (a notification has none).
+* A handler that raises sets the span status to error. So does a tool result with `is_error=True`.
+
+And because tracing a tool call is such a common thing to want, `tools/call` spans speak
+OpenTelemetry's [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/):
+
+* `gen_ai.operation.name`, set to `"execute_tool"`.
+* `gen_ai.tool.name`, set to the tool being called.
+
+A `prompts/get` span gets `gen_ai.prompt.name` in the same spirit. The list methods carry no
+`gen_ai.*` keys, because there is nothing to name.
+
+!!! tip
+    Those GenAI attributes are the reason a tracing UI groups your tool calls the way it groups
+    any other agent's. You get that grouping for free, with no extra code.
+
+## It costs nothing until you want it
+
+Here is the part that makes "on by default" a comfortable default.
+
+The SDK depends only on `opentelemetry-api`, the lightweight half of OpenTelemetry. With no SDK
+and no exporter installed, creating a span is a no-op. So the spans your server is emitting right
+now cost you almost nothing, and nobody is collecting them.
+
+The day you want to *see* them, you install the other half and point it somewhere:
+
+```console
+uv add opentelemetry-sdk opentelemetry-exporter-otlp
+```
+
+Configure an exporter the usual OpenTelemetry way, and every span the SDK has been quietly
+creating lights up. Your server code does not change. Not one line.
+
+!!! info
+    [Pydantic Logfire](https://logfire.pydantic.dev/) is one such backend, and it does the
+    configuration for you: `pip install logfire`, `logfire.configure()`, and your MCP spans show
+    up in the live view. It is built on OpenTelemetry, so anything below applies to it too.
+
+## Traces that cross the wire
+
+A trace is most useful when it follows a request from the client into the server, in one
+connected picture.
+
+When the client and the server both run the SDK, that connection is automatic. The client injects
+the [W3C trace context](https://www.w3.org/TR/trace-context/) into the request, and the server
+reads it back out, so the server span nests under the client span in the same trace. This is
+[SEP-414](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/414), and you get it without
+asking.
+
+If the inbound message carries no trace context, for example a request from a client that is not
+the SDK, the server span simply parents to whatever span is already current on the server, rather
+than starting a brand-new orphan trace.
+
+## Turning it off
+
+Tracing is a middleware, the first one on your server's list. If you really want a server that
+emits no spans, take it off:
+
+```python
+from mcp.server._otel import OpenTelemetryMiddleware
+
+mcp._lowlevel_server.middleware[:] = [
+    m for m in mcp._lowlevel_server.middleware if not isinstance(m, OpenTelemetryMiddleware)
+]
+```
+
+!!! warning
+    That import has a leading underscore, and that is on purpose. The class is provisional, the
+    same way [`Server.middleware`](https://py.sdk.modelcontextprotocol.io/advanced/middleware/index.md) is provisional, so the import path is something
+    you should expect to change. You almost never need this: with no exporter installed the spans
+    are free, so the usual answer is to leave them on and not install an exporter.
+
+## Recap
+
+* Every `MCPServer` and every low-level `Server` emits one `SERVER` span per inbound message, out
+  of the box. You write nothing.
+* Spans carry `mcp.method.name` and `mcp.protocol.version`; `tools/call` and `prompts/get` also
+  carry GenAI attributes so your tool calls group like any other agent's.
+* It costs nothing until you install an OpenTelemetry SDK and an exporter, and then it lights up
+  with no change to your server.
+* Client-to-server trace context propagates automatically when both sides run the SDK.
+
+The thing that decides whether a request runs at all is **[Authorization](https://py.sdk.modelcontextprotocol.io/run/authorization/index.md)**.
+
+# Serving legacy clients
+
+Source: https://py.sdk.modelcontextprotocol.io/run/legacy-clients/
+
+MCP has two protocol eras: the `initialize`-handshake era, up to spec version `2025-11-25`, and the modern era, `2026-07-28`. **[Protocol versions](https://py.sdk.modelcontextprotocol.io/protocol-versions/index.md)** is the page on the split itself.
+
+This page is about the server side of that split, and the answer fits in one sentence: **the `streamable_http_app()` you already deploy serves both.**
+
+The SDK routes every request by its `MCP-Protocol-Version` header. A request naming `2026-07-28` goes to the modern handler. A request naming a handshake-era version, or carrying no header at all (which is how a pre-2026 client's `initialize` arrives), goes to the transport those clients expect: `initialize` handshake, sessions and all. It happens per request, before your code, on the one app.
+
+So a legacy client is not something you build *for*. It is something that connects *to* the server you already wrote. You configure nothing.
+
+!!! note
+    Nothing, literally. There is no `legacy=` option, no version allowlist, no way to reject or
+    disable an era: not on `streamable_http_app()`, not on `run()`, not on the session manager.
+    Both eras are always on. The nearest thing to a per-era switch in that signature is
+    `stateless_http`, and it is most of this page.
+
+## One handler, both eras
+
+Here is a tool that has to ask the user something:
+
+```python title="server.py" hl_lines="21"
+# docs_src/legacy_clients/tutorial001.py
+from typing import Annotated
+
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import AcceptedElicitation, Elicit, ElicitationResult, Resolve
+
+mcp = MCPServer("Bookshop")
+
+
+class Quantity(BaseModel):
+    copies: int
+
+
+async def ask_quantity() -> Elicit[Quantity]:
+    """Resolver: ask the user how many copies to put aside."""
+    return Elicit("How many copies?", Quantity)
+
+
+@mcp.tool()
+async def reserve(title: str, quantity: Annotated[ElicitationResult[Quantity], Resolve(ask_quantity)]) -> str:
+    """Reserve copies of a book, asking the user how many."""
+    if isinstance(quantity, AcceptedElicitation):
+        return f"Reserved {quantity.data.copies} of {title!r}."
+    return "Nothing reserved."
+```
+
+`reserve` needs one thing the model didn't supply: how many copies. `Annotated[..., Resolve(ask_quantity)]` is how a tool declares that (**[Dependencies](https://py.sdk.modelcontextprotocol.io/handlers/dependencies/index.md)** is that whole story). Nothing in `reserve` names a version, checks a capability, or branches.
+
+Serve it over HTTP, and here are both eras of client calling it:
+
+```console
+uv run mcp run server.py --transport streamable-http
+```
+
+```python title="client.py" hl_lines="14-15"
+# docs_src/legacy_clients/tutorial001_client.py
+import anyio
+
+from mcp import Client
+from mcp.client import ClientRequestContext
+from mcp.types import ElicitRequestParams, ElicitResult
+
+
+async def answer(context: ClientRequestContext, params: ElicitRequestParams) -> ElicitResult:
+    return ElicitResult(action="accept", content={"copies": 2})
+
+
+async def main() -> None:
+    async with (
+        Client("http://localhost:8000/mcp", mode="legacy", elicitation_callback=answer) as legacy,
+        Client("http://localhost:8000/mcp", elicitation_callback=answer) as modern,
+    ):
+        for client in (legacy, modern):
+            result = await client.call_tool("reserve", {"title": "Dune"})
+            print(client.protocol_version, result.structured_content)
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+The two clients are open **at the same time**, against the same running server. `mode="legacy"` runs the `initialize` handshake: the exact connection a pre-2026 client opens. The other one takes the default and lands on `2026-07-28`. Run `python client.py` from a second terminal:
+
+```text
+2025-11-25 {'result': "Reserved 2 of 'Dune'."}
+2026-07-28 {'result': "Reserved 2 of 'Dune'."}
+```
+
+Same server, same handler, same answer. That is the whole feature.
+
+It is worth pausing on *how*, because the two clients were asked the same question over two completely different wires. The `2026-07-28` connection has no channel for the server to send a request on, so `Resolve` returned the question inside the tool result and the client retried the call with the answer (**[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**). The `2025-11-25` connection has no such thing; there, `Resolve` sent a live `elicitation/create` request mid-call and waited. You wrote neither. `Resolve` reads the connection's negotiated version and picks; your tool body sees an `AcceptedElicitation` either way.
+
+!!! tip
+    That era-portability is *why* `Resolve` is the API to build on. Its older sibling `ctx.elicit()`
+    (**[Elicitation](https://py.sdk.modelcontextprotocol.io/handlers/elicitation/index.md)**) only ever sends `elicitation/create`, so it only
+    ever works on a legacy connection. On a `2026-07-28` one the call fails. If a tool still uses
+    it, the fix is the one you see above, not a version check.
+
+## What a legacy session costs you
+
+The routing is free. The session is not.
+
+A `2026-07-28` connection is **sessionless**: every request stands alone, and the modern handler never issues an `Mcp-Session-Id`. A legacy connection is the opposite. The moment a pre-2026 client sends `initialize`, the SDK mints an `Mcp-Session-Id`, returns it in a response header, and keeps a live record behind it for the client's later requests to find: the negotiated version, the open streams, a background task driving the session.
+
+That record is a **plain in-process `dict`**. There is no distributed session store and no way to plug one in.
+
+On one worker that is invisible. On two, it is the whole problem: a request that carries an `Mcp-Session-Id` and lands on a worker that didn't mint it finds nothing in that dict, and the answer is a `404` (`Session not found`), not the tool result. So the moment you run more than one worker, **legacy clients need sticky routing**: every request in a session has to reach the process that started it. Modern clients never do; they have no session to be sticky to. **[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)** covers stickiness and everything else about running more than one of these.
+
+!!! warning
+    `event_store=` looks like the fix and is not. It is **resumability** (replaying missed SSE
+    events to a client reconnecting to the *same* session), not a session store. It never makes a
+    session reachable from another process.
+
+## Session lifetime and limits
+
+A legacy session does not live forever, and one process does not hold an unlimited number of
+them. Two settings control this. Both are keyword arguments on `run()`, `streamable_http_app()`
+and `Server.streamable_http_app()`. Modern (`2026-07-28`) connections and `stateless_http=True`
+have no sessions, so neither setting applies to them.
+
+| Setting | Default | What it does | What the client sees | Turn it off |
+|---|---|---|---|---|
+| `session_idle_timeout` | `1800` (30 min) | Closes a session that has had nothing in flight for that long. | `404 Session not found`. It has to `initialize` again. | `None` |
+| `max_sessions` | `10_000` | Refuses to open a session beyond that many. Existing sessions are untouched and nothing is evicted. | `503 Too many open sessions` with JSON-RPC code `-32603`. | `None` |
+
+What counts as "in flight":
+
+* An open `GET` stream. The SDK clients keep one open, so a connected client's session never
+  expires.
+* A request that is still being answered. A tool call that runs longer than the timeout is not
+  interrupted, and the countdown only starts once it finishes.
+* Nothing else. Between requests the clock runs. Any request on the session restarts it,
+  `ping` included. Once a session has expired, nothing revives it.
+
+A client that ends its session with `DELETE` frees it immediately. So does a client whose
+opening request was refused.
+
+```python
+mcp.run(transport="streamable-http", session_idle_timeout=None, max_sessions=50_000)
+```
+
+Both events show up in the server log. An expiry is `Session <id> idle timeout` at `INFO`. A
+refused open is `Refusing to open a new session: <n> sessions are already open` at `WARNING`.
+
+The limits are per process. With four workers the ceiling is four times `max_sessions`, and each
+worker expires its own sessions.
+
+## The one knob: `stateless_http`
+
+If stickiness is a cost you refuse to pay, there is exactly one thing you can change.
+
+```python title="server.py" hl_lines="28"
+# docs_src/legacy_clients/tutorial002.py
+from typing import Annotated
+
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import AcceptedElicitation, Elicit, ElicitationResult, Resolve
+
+mcp = MCPServer("Bookshop")
+
+
+class Quantity(BaseModel):
+    copies: int
+
+
+async def ask_quantity() -> Elicit[Quantity]:
+    """Resolver: ask the user how many copies to put aside."""
+    return Elicit("How many copies?", Quantity)
+
+
+@mcp.tool()
+async def reserve(title: str, quantity: Annotated[ElicitationResult[Quantity], Resolve(ask_quantity)]) -> str:
+    """Reserve copies of a book, asking the user how many."""
+    if isinstance(quantity, AcceptedElicitation):
+        return f"Reserved {quantity.data.copies} of {title!r}."
+    return "Nothing reserved."
+
+
+app = mcp.streamable_http_app(stateless_http=True)
+```
+
+That is the server from the top of the page plus one keyword. `stateless_http=True` makes the legacy leg build a throwaway, per-request session instead: no `Mcp-Session-Id` issued, nothing remembered between requests, so any worker can serve any request and the load balancer can do whatever it likes.
+
+Two things about it matter more than what it does.
+
+**It only touches the legacy leg.** Requests are routed on the version header *before* `stateless_http` is read, so the modern path never sees it. A `2026-07-28` connection is already sessionless and is exactly the same under either value.
+
+**It costs both server-to-client channels on that leg.** A session that lives for one `POST` has no stream for the server to push a request down and no standalone stream for it to push notifications down. Every server-initiated request raises `NoBackChannelError`: `ctx.elicit()`, the retired sampling and roots calls (**[Deprecated features](https://py.sdk.modelcontextprotocol.io/deprecated/index.md)**), and, yes, `Resolve` asking a *legacy* client its question. Notifications don't even get an error; they are silently dropped.
+
+!!! note
+    `json_response=True` is not that knob, but it takes half the same cost on *every* legacy
+    session: a `POST` answered with one JSON body has no stream for the request-scoped channel,
+    so a mid-request `ctx.elicit()` raises the same `NoBackChannelError` and notifications tied to
+    the request are dropped. The session's standalone stream is untouched: unrelated notifications
+    still arrive.
+
+!!! check
+    Do the wrong thing. `reserve` is the exact tool that just served both clients. Deploy it with
+    `stateless_http=True`, connect the same two clients, and call it from each.
+
+    The modern client still gets `Reserved 2 of 'Dune'.` The modern leg didn't change.
+
+    The legacy client's call does not come back as an `is_error` result the model could read.
+    The whole request fails, as a top-level protocol error:
+
+    ```text
+    mcp.shared.exceptions.MCPError: Cannot send 'elicitation/create': this transport context has no back-channel for server-initiated requests.
+    ```
+
+    `Resolve` did not save you. On a `2025-11-25` connection it *has* to send `elicitation/create`,
+    and the channel it needs is exactly the thing `stateless_http=True` gave away. Era-portable
+    code is not back-channel-free code.
+
+So it is a real trade, and it only exists on the legacy leg: **sessionful and sticky, or stateless and one-directional.** If your tools never call back into the client, `stateless_http=True` is free and you should take it. If they do, keep the sessions and keep the routing sticky.
+
+## Where your code actually forks
+
+Almost nowhere.
+
+Tools, resources, prompts, structured output, progress, errors: none of them care which era called. The `initialize` handshake, the `Mcp-Session-Id`, the standalone stream, the `DELETE` that ends a session: the SDK owns all of it, and a handler never sees any of it. Interactive input is *the* place the eras genuinely differ on the wire, and `Resolve` exists so that it is not your problem: you just watched one tool serve both.
+
+There is exactly one thing left, and it is **change notifications**, because the two eras listen on different pipes:
+
+* A `2026-07-28` client opens a `subscriptions/listen` stream and reads the subscriptions bus. `ctx.notify_resource_updated()` (and `notify_tools_changed()`, `notify_prompts_changed()`, `notify_resources_changed()`) publish there, and *only* there. **[Subscriptions](https://py.sdk.modelcontextprotocol.io/handlers/subscriptions/index.md)** is that page.
+* A legacy client reads the standalone stream its session keeps open. `ctx.session.send_resource_updated()` (and `send_tool_list_changed()` and friends) write to the *connection* that carried the request: for a legacy session, that is its standalone stream. A modern connection has no place for it: over HTTP there is no such channel, and over stdio the four change-notification kinds ride `subscriptions/listen` streams only, so on a modern connection the notification is quietly dropped.
+
+Over HTTP, neither call reaches the other era's clients. To tell everyone, call both:
+
+```python title="server.py" hl_lines="19-20"
+# docs_src/legacy_clients/tutorial003.py
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+
+mcp = MCPServer("Bookshop")
+
+STOCK = {"Dune": 3}
+
+
+@mcp.resource("stock://{title}")
+def stock(title: str) -> str:
+    """How many copies of one book are on the shelf."""
+    return f"{STOCK[title]} in stock"
+
+
+@mcp.tool()
+async def restock(title: str, copies: int, ctx: Context) -> str:
+    """Put copies of a book back on the shelf."""
+    STOCK[title] = STOCK.get(title, 0) + copies
+    await ctx.notify_resource_updated(f"stock://{title}")
+    await ctx.session.send_resource_updated(f"stock://{title}")
+    return f"{STOCK[title]} in stock"
+```
+
+Two lines, no `if`, no version check, and you are done. That is the entire list of things a handler does differently because a legacy client exists.
+
+## Recap
+
+* One `streamable_http_app()` serves both protocol eras. The SDK routes each request by its `MCP-Protocol-Version` header; there is nothing to configure and no era knob to look for.
+* A legacy client costs you a session: an in-process `Mcp-Session-Id` record with no distributed store behind it. More than one worker means **sticky routing**, or the wrong worker answers `404 Session not found`. **[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md)** has the multi-worker story.
+* `stateless_http=True` is the one knob, and it is **legacy-leg-only**. It buys free load balancing for legacy clients at the price of both server-to-client channels on that leg: server-initiated requests raise `NoBackChannelError` (a top-level error at the client, not an `is_error` result), and notifications are dropped.
+* A `2026-07-28` connection is sessionless either way. `stateless_http` never touches it.
+* Your handler code forks on era in exactly one place: change notifications. `ctx.notify_*` reaches `subscriptions/listen` clients; `ctx.session.send_*` reaches legacy sessions. Call both.
+* Everything else (including asking the user for input, via `Resolve`) is era-portable by construction. Write the modern thing once.
+
+# The Client
+
+Source: https://py.sdk.modelcontextprotocol.io/client/
+
+A **`Client`** is how a Python program talks to an MCP server.
+
+It is one object with one lifecycle: construct it, enter `async with`, call methods. Every protocol verb (list the tools, call one, read a resource, render a prompt) is an `async` method on it that returns a typed result.
+
+## Your first client
+
+A client needs a server to talk to. This Bookshop is the one every snippet on this page connects to. Save it as `server.py` and leave it running over HTTP:
+
+```python title="server.py"
+# docs_src/client/tutorial001.py
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import Completion, CompletionArgument, CompletionContext, PromptReference, ResourceTemplateReference
+
+mcp = MCPServer("Bookshop", instructions="Search the catalog before recommending a book.")
+
+GENRES = ["fiction", "non-fiction", "poetry"]
+
+
+class Book(BaseModel):
+    title: str
+    author: str
+    year: int
+
+
+@mcp.tool(title="Search the catalog")
+def search_books(query: str, limit: int = 10) -> str:
+    """Search the catalog by title or author."""
+    return f"Found 3 books matching {query!r} (showing up to {limit})."
+
+
+@mcp.tool()
+def lookup_book(title: str) -> Book:
+    """Look up a book by its exact title."""
+    if title != "Dune":
+        raise ToolError(f"No book titled {title!r} in the catalog.")
+    return Book(title="Dune", author="Frank Herbert", year=1965)
+
+
+@mcp.resource("catalog://genres")
+def genres() -> list[str]:
+    """The genres the catalog is organised by."""
+    return GENRES
+
+
+@mcp.resource("catalog://genres/{genre}")
+def books_in_genre(genre: str) -> str:
+    """Every title we stock in one genre."""
+    return f"3 books filed under {genre}."
+
+
+@mcp.prompt(title="Recommend a book")
+def recommend(genre: str) -> str:
+    """Ask for a recommendation in a genre."""
+    return f"Recommend one {genre} book from the catalog and say why."
+
+
+@mcp.completion()
+async def complete_genre(
+    ref: PromptReference | ResourceTemplateReference,
+    argument: CompletionArgument,
+    context: CompletionContext | None,
+) -> Completion | None:
+    return Completion(values=[genre for genre in GENRES if genre.startswith(argument.value)])
+```
+
+```console
+uv run mcp run server.py --transport streamable-http
+```
+
+That serves it at `http://localhost:8000/mcp`. The client is its own program. Save it as `client.py` and run `python client.py` in a second terminal:
+
+```python title="client.py" hl_lines="7-11"
+# docs_src/client/tutorial001_client.py
+import anyio
+
+from mcp import Client
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        print(client.server_info)
+        print(client.server_capabilities)
+        print(client.protocol_version)
+        print(client.instructions)
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+* `Client("http://localhost:8000/mcp")` is given a **URL**, so it connects over Streamable HTTP to the server you just started.
+* `async with` is the **lifecycle**. Entering it connects and negotiates; leaving it disconnects. There is no `connect()` / `close()` pair, and a `Client` cannot be reused after the block ends.
+* Inside the block the connection facts are already there as plain properties.
+
+### What you can pass to `Client`
+
+`Client` takes one positional argument and resolves the transport from its type:
+
+* A URL string (`Client("http://localhost:8000/mcp")`): Streamable HTTP, the transport you deploy behind.
+* A `StdioServerParameters`: the command to launch as a local **subprocess**, spoken to over its stdin and stdout.
+* A **transport**: anything you can `async with ... as (read, write)`, such as `streamable_http_client(url, http_client=...)` around your own HTTP client.
+* An `MCPServer` (or low-level `Server`) instance: connected **in-process**, with no subprocess and no port. That one is for tests, and **[Testing](https://py.sdk.modelcontextprotocol.io/get-started/testing/index.md)** builds on it.
+
+Everything else on this page is identical across all four. Headers, subprocesses, timeouts, and the `Transport` protocol get their own page: **[Client transports](https://py.sdk.modelcontextprotocol.io/client/transports/index.md)**.
+
+### What's on a connected client
+
+Four read-only properties, populated the moment you enter the block:
+
+* `client.server_info`: the server's identity, or `None` for a 2026-era server that does not report one (python-sdk servers do by default). `server_info.name` here is `"Bookshop"`, `server_info.version` is whatever the server reports.
+* `client.server_capabilities`: what the server can do (`tools`, `resources`, `prompts`, `completions`, ...). A capability the server doesn't have is `None`.
+* `client.protocol_version`: the protocol version the two sides agreed on. Here it is `"2026-07-28"`.
+* `client.instructions`: the server's `instructions=` string, or `None` if it didn't set one.
+
+You never picked a protocol version. By default the `Client` probes the server and falls back to the classic handshake on older ones, so one client works against any era of server. When you need to control that, **[Protocol versions](https://py.sdk.modelcontextprotocol.io/protocol-versions/index.md)** has the whole story.
+
+!!! tip
+    `client.session` is the underlying `ClientSession`, the low-level escape hatch.
+    You won't need it for anything on this page.
+
+## Listing tools
+
+```python title="client.py" hl_lines="8-13"
+# docs_src/client/tutorial002.py
+import anyio
+
+from mcp import Client
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        result = await client.list_tools()
+        for tool in result.tools:
+            print(tool.name)
+            print(tool.title)
+            print(tool.description)
+            print(tool.input_schema)
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+`list_tools()` returns a `ListToolsResult`; the tools are in `.tools`. Each one is the complete definition a host would hand to a model. Here is the first:
+
+```python
+tool.name          # 'search_books'
+tool.title         # 'Search the catalog'
+tool.description   # 'Search the catalog by title or author.'
+```
+
+and `tool.input_schema` is the JSON Schema the server derived from the function's type hints:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {"title": "Query", "type": "string"},
+    "limit": {"default": 10, "title": "Limit", "type": "integer"}
+  },
+  "required": ["query"],
+  "title": "search_booksArguments"
+}
+```
+
+That schema is everything a UI needs to render an argument form, and everything a model needs to produce valid arguments.
+
+The second tool, `lookup_book`, was registered without a `title=`, so its `tool.title` is `None`.
+
+!!! tip
+    `title` is optional, so a UI showing tools to a human has to pick: the `title` if there is one,
+    the `name` if not. `from mcp.shared.metadata_utils import get_display_name` does exactly that,
+    for tools, resources, resource templates and prompts.
+
+## Calling a tool
+
+`call_tool(name, arguments)` runs the tool and gives you back a `CallToolResult`.
+
+```python title="client.py" hl_lines="9-16"
+# docs_src/client/tutorial003.py
+import anyio
+
+from mcp import Client
+from mcp.types import TextContent
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        result = await client.call_tool("lookup_book", {"title": "Dune"})
+
+        for block in result.content:
+            if isinstance(block, TextContent):
+                print(block.text)
+
+        print(result.structured_content)
+        print(result.is_error)
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+The server's `lookup_book` returns a Pydantic `Book`. Here is what the client sees:
+
+```python
+result.content             # [TextContent(type='text', text='{\n  "title": "Dune",\n  "author": "Frank Herbert",\n  "year": 1965\n}')]
+result.structured_content  # {'title': 'Dune', 'author': 'Frank Herbert', 'year': 1965}
+result.is_error            # False
+```
+
+One return value, three things to read. Each has a different consumer.
+
+### `content`: what the model reads
+
+`content` is a `list` of **content blocks**, and a content block is a union: `TextContent`, `ImageContent`, `AudioContent`, `ResourceLink`, or `EmbeddedResource`. A tool can return several, of different kinds.
+
+That is why `main` narrows with `isinstance(block, TextContent)` before touching `block.text`. Notice there is no `.text` outside the `isinstance`: the type checker won't allow it, because `ImageContent` has `.data`, not `.text`. The union is honest about what a tool is allowed to send you; your code should be too.
+
+### `structured_content`: what your application reads
+
+`structured_content` is the tool's return value as JSON, matching the tool's declared `output_schema`. No string parsing, no guessing.
+
+When both are present they say the same thing twice on purpose: `content` is for a model, `structured_content` is for code. Where the structured half comes from, and how to control it, is the **[Structured Output](https://py.sdk.modelcontextprotocol.io/servers/structured-output/index.md)** page.
+
+### `is_error`: whether the tool failed
+
+A tool that raises does **not** raise in your client. It comes back as an ordinary result with `is_error=True`.
+
+!!! check
+    Ask `lookup_book` for `"Solaris"` (a title that isn't in the catalog) and the function raises
+    `ToolError`. The call still returns normally:
+
+    ```python
+    result.is_error            # True
+    result.content             # [TextContent(type='text', text="Error executing tool lookup_book: No book titled 'Solaris' in the catalog.")]
+    result.structured_content  # None
+    ```
+
+    The `ToolError`'s message landed in `content`, where the **model** can read it and try again. That
+    is deliberate: a tool error is part of the conversation, not a crash. (Had the tool crashed with
+    some other exception, `content` would say only `Error executing tool lookup_book`.) Always look at
+    `is_error` before you trust `structured_content`.
+
+!!! warning
+    `is_error=True` covers more than your own `raise`. Ask for a tool the server doesn't even have
+    (`call_tool("does_not_exist", {})`) and nothing raises. You get the same shape back,
+    `is_error=True` with `Unknown tool: does_not_exist` in `content`. A `Client` method raises
+    `MCPError` only when the server answers with a JSON-RPC **error** instead of a result, and
+    **[Handling errors](https://py.sdk.modelcontextprotocol.io/servers/handling-errors/index.md)** covers when a server produces which.
+
+## Resources
+
+The resource verbs come in pairs: two ways to list, one way to read.
+
+```python title="client.py" hl_lines="9-18"
+# docs_src/client/tutorial004.py
+import anyio
+
+from mcp import Client
+from mcp.types import TextResourceContents
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        listed = await client.list_resources()
+        print([resource.uri for resource in listed.resources])
+
+        templates = await client.list_resource_templates()
+        print([template.uri_template for template in templates.resource_templates])
+
+        result = await client.read_resource("catalog://genres/poetry")
+        for contents in result.contents:
+            if isinstance(contents, TextResourceContents):
+                print(contents.text)
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+* `list_resources()` returns the **concrete** resources, the ones with a fixed URI. Here: `['catalog://genres']`.
+* `list_resource_templates()` returns the **parameterised** ones. Here: `['catalog://genres/{genre}']`. They are two different lists because a template isn't readable until you fill it in.
+* `read_resource(uri)` takes a plain `str` URI and works on both: pass `"catalog://genres/poetry"` and the server matches it to the template.
+
+`read_resource` returns `contents`, a list of `TextResourceContents` or `BlobResourceContents`. Same idea as tool content: narrow with `isinstance`, then read `.text` (or `.blob`).
+
+A client can also be told when a resource changes. On 2025-era connections that is `subscribe_resource(uri)` / `unsubscribe_resource(uri)` - a method pair `MCPServer` doesn't implement, so on the 2026-07-28 wire (where those verbs no longer exist) the request answers `-32601`, *Method not found*. The 2026 replacement is a `subscriptions/listen` stream, which `MCPServer` *does* serve - `server_capabilities.resources.subscribe` is `True` there - and consuming it with `client.listen(...)` is this section's **[Subscriptions](https://py.sdk.modelcontextprotocol.io/client/subscriptions/index.md)** page.
+
+## Prompts
+
+```python title="client.py" hl_lines="8-13"
+# docs_src/client/tutorial005.py
+import anyio
+
+from mcp import Client
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        listed = await client.list_prompts()
+        print(listed.prompts)
+
+        result = await client.get_prompt("recommend", {"genre": "poetry"})
+        for message in result.messages:
+            print(message.role, message.content)
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+`list_prompts()` tells you what the server offers and what each prompt needs:
+
+```python
+prompt.name        # 'recommend'
+prompt.title       # 'Recommend a book'
+prompt.arguments   # [PromptArgument(name='genre', required=True)]
+```
+
+`get_prompt(name, arguments)` renders it. The arguments dict is `str -> str`: prompt arguments are always strings. The result is `messages`, a list of `PromptMessage`, each with a `role` and a `content` block:
+
+```python
+message.role     # 'user'
+message.content  # TextContent(type='text', text='Recommend one poetry book from the catalog and say why.')
+```
+
+A host hands those messages straight to the model. That is the whole feature.
+
+## Completions
+
+A server with a completion handler can autocomplete prompt and resource-template arguments as the user types.
+
+```python title="client.py" hl_lines="9-13"
+# docs_src/client/tutorial006.py
+import anyio
+
+from mcp import Client
+from mcp.types import PromptReference
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        result = await client.complete(
+            ref=PromptReference(type="ref/prompt", name="recommend"),
+            argument={"name": "genre", "value": "p"},
+        )
+        print(result.completion.values)
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+* `ref` says *which* prompt or template you're filling in: a `PromptReference` or a `ResourceTemplateReference`.
+* `argument` is `{"name": ..., "value": ...}`: the argument and what the user has typed so far.
+
+The answer is in `result.completion.values`. Type `"p"` and the server comes back with `['poetry']`. The server side, and how a handler uses the *other* already-filled arguments to narrow its suggestions, is the **[Completions](https://py.sdk.modelcontextprotocol.io/servers/completions/index.md)** page.
+
+## Pagination
+
+Every `list_*` method takes a `cursor=` keyword and every result carries a `next_cursor`. When `next_cursor` is `None`, you have everything.
+
+```python title="client.py" hl_lines="7-15"
+# docs_src/client/tutorial007.py
+import anyio
+
+from mcp import Client
+from mcp.types import Tool
+
+
+async def list_all_tools(client: Client) -> list[Tool]:
+    tools: list[Tool] = []
+    cursor: str | None = None
+    while True:
+        page = await client.list_tools(cursor=cursor)
+        tools.extend(page.tools)
+        if page.next_cursor is None:
+            return tools
+        cursor = page.next_cursor
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        tools = await list_all_tools(client)
+        print([tool.name for tool in tools])
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+`list_all_tools` is correct against every server. `MCPServer` returns everything in one page, so `next_cursor` is `None` and the loop runs once, which is why most code never writes it. Servers that genuinely page, and the rules cursors obey, are in **[Pagination](https://py.sdk.modelcontextprotocol.io/advanced/pagination/index.md)**.
+
+## In tests
+
+Every `client.py` on this page reached `server.py` over HTTP. In a test you skip the network and hand `Client` the server object itself: `from server import mcp`, then `Client(mcp)`. No process, no port, and every method above works the same.
+
+There is one constructor flag built for that: `Client(mcp, raise_exceptions=True)`. It only has an effect on in-process connections, and **[Testing](https://py.sdk.modelcontextprotocol.io/get-started/testing/index.md)** is the page that explains it and builds the whole pattern around it.
+
+## Recap
+
+* `Client(x)` connects over Streamable HTTP to a URL string, launches a subprocess for a `StdioServerParameters`, enters a transport directly, and in tests takes the server object itself.
+* `async with` is the whole lifecycle. Inside it, `server_capabilities` and `protocol_version` are already populated; `server_info` and `instructions` are too when the server provides them.
+* `list_tools()` gives you each tool's `name`, `title`, `description` and `input_schema`.
+* `call_tool()` returns `content` for the model, `structured_content` for your code, and `is_error`. A raising tool is a result, not an exception.
+* `content` is a union of block types; narrow with `isinstance` before reading.
+* `list_resources` / `list_resource_templates` / `read_resource`, `list_prompts` / `get_prompt`, and `complete` round out the verbs.
+* Every `list_*` takes `cursor=`; loop until `next_cursor` is `None`.
+
+The things a server can ask the *client* for, and how you answer them, are **[Client callbacks](https://py.sdk.modelcontextprotocol.io/client/callbacks/index.md)**.
+
+# Callbacks
+
+Source: https://py.sdk.modelcontextprotocol.io/client/callbacks/
+
+Nearly every request in MCP goes one way: client to server.
+
+A server can also ask the **client** for things: to put a question to the user, to sample the user's model, to list the user's workspace folders. You answer those requests by passing **callbacks** to `Client(...)`.
+
+## A server that asks
+
+Here is a server whose tool can't finish on its own:
+
+```python title="server.py" hl_lines="16"
+# docs_src/client_callbacks/tutorial001.py
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+
+mcp = MCPServer("Library")
+
+
+class CardHolder(BaseModel):
+    name: str
+
+
+@mcp.tool()
+async def issue_card(ctx: Context) -> str:
+    """Issue a new library card."""
+    answer = await ctx.elicit("What name should go on the card?", schema=CardHolder)
+    if answer.action == "accept":
+        return f"Card issued to {answer.data.name}."
+    return "No card issued."
+```
+
+* `ctx.elicit(...)` sends an `elicitation/create` request **to the client** and waits.
+* The tool doesn't return until somebody (a person in a form, or your code) supplies a `name`.
+
+That is the server half, and the **[Elicitation](https://py.sdk.modelcontextprotocol.io/handlers/elicitation/index.md)** page owns it. This page is the other end of the wire.
+
+## The elicitation callback
+
+```python title="client.py" hl_lines="6-10 16-17"
+# docs_src/client_callbacks/tutorial002.py
+from mcp import Client
+from mcp.client import ClientRequestContext
+from mcp.types import ElicitRequestParams, ElicitResult
+
+
+async def handle_elicitation(
+    context: ClientRequestContext,
+    params: ElicitRequestParams,
+) -> ElicitResult:
+    return ElicitResult(action="accept", content={"name": "Ada Lovelace"})
+
+
+async def main() -> None:
+    async with Client(
+        "http://127.0.0.1:8000/mcp",
+        mode="legacy",
+        elicitation_callback=handle_elicitation,
+    ) as client:
+        result = await client.call_tool("issue_card")
+        print(result.content)
+```
+
+* An elicitation callback is `async (context, params) -> ElicitResult`.
+* `params.message` is the question. `params.requested_schema` is the JSON Schema of the answer the server wants. A real client renders a form from it; this one auto-fills.
+* You return `ElicitResult(action="accept", content={...})`, or `action="decline"`, or `action="cancel"`. The only other option is `ErrorData(...)`, which refuses the request and fails the whole call.
+* `context` is a `ClientRequestContext`: the live `session`, the server's `request_id`, and any `meta` it attached.
+
+!!! tip
+    `params` is a union of the two elicitation modes. Here `params.mode` is `"form"`; a `"url"` request
+    carries `params.url` instead of a schema. One callback handles both; branch on `params.mode`.
+    **[Elicitation](https://py.sdk.modelcontextprotocol.io/handlers/elicitation/index.md)** shows the full pattern.
+
+### Try it
+
+Call `issue_card` and watch both ends.
+
+Your callback receives the server's question, already parsed:
+
+```python
+params.mode              # 'form'
+params.message           # 'What name should go on the card?'
+params.requested_schema  # {'properties': {'name': {'title': 'Name', 'type': 'string'}},
+                         #  'required': ['name'], 'title': 'CardHolder', 'type': 'object'}
+```
+
+It answers, `ctx.elicit(...)` resumes inside the tool, and the tool finishes:
+
+```python
+result.content  # [TextContent(type='text', text='Card issued to Ada Lovelace.')]
+```
+
+One `tools/call` from you, one `elicitation/create` back from the server, answered by your function, all inside a single tool call.
+
+!!! info
+    `mode="legacy"` on the `Client(...)` call is doing real work. By default `Client(...)` negotiates the modern
+    protocol path, and that path has no back-channel for server-to-client requests: `ctx.elicit`
+    fails before your callback ever runs. The transport doesn't decide that; the negotiated
+    protocol does. Pin `mode="legacy"` whenever your client has
+    to answer one; every test behind this page does. **[Protocol versions](https://py.sdk.modelcontextprotocol.io/protocol-versions/index.md)** has the whole story.
+
+    On a 2026-07-28 session the callback isn't dead, it's fed differently: when a tool returns an
+    `InputRequiredResult` carrying an `ElicitRequest`, `Client` dispatches that entry to the same
+    `elicitation_callback` and retries the call for you. That flow is **[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**.
+
+## A callback is a capability
+
+You never told the server that your client can answer elicitation requests. The SDK did.
+
+When a client connects it declares its `capabilities`, the mirror image of the server's. You don't write that object. **Registering a callback is the declaration.**
+
+| you pass | the client declares |
+| --- | --- |
+| `elicitation_callback=` | `"elicitation": {"form": {}, "url": {}}` |
+| `sampling_callback=` | `"sampling": {}` |
+| `list_roots_callback=` | `"roots": {"listChanged": true}` |
+| none of them | `{}` |
+
+Sampling sub-capabilities are the one refinement: pass `sampling_capabilities=SamplingCapability(tools=SamplingToolsCapability())` alongside `sampling_callback` when your sampler handles the `tools` / `tool_choice` parameters. Servers must see `sampling.tools` declared before they can send them.
+
+`logging_callback` and `message_handler` are not in the table. They handle notifications, and notifications need no capability.
+
+The server reads the declaration back with `ctx.session.check_client_capability(...)`. Add a tool that does:
+
+```python title="server.py" hl_lines="23-31"
+# docs_src/client_callbacks/tutorial003.py
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+from mcp.types import ClientCapabilities, ElicitationCapability, RootsCapability, SamplingCapability
+
+mcp = MCPServer("Library")
+
+
+class CardHolder(BaseModel):
+    name: str
+
+
+@mcp.tool()
+async def issue_card(ctx: Context) -> str:
+    """Issue a new library card."""
+    answer = await ctx.elicit("What name should go on the card?", schema=CardHolder)
+    if answer.action == "accept":
+        return f"Card issued to {answer.data.name}."
+    return "No card issued."
+
+
+@mcp.tool()
+def client_features(ctx: Context) -> list[str]:
+    """Which optional features the connected client declared."""
+    declared = {
+        "elicitation": ClientCapabilities(elicitation=ElicitationCapability()),
+        "sampling": ClientCapabilities(sampling=SamplingCapability()),
+        "roots": ClientCapabilities(roots=RootsCapability()),
+    }
+    return [name for name, capability in declared.items() if ctx.session.check_client_capability(capability)]
+```
+
+Connect with only `elicitation_callback` and call it:
+
+```python
+result.structured_content  # {'result': ['elicitation']}
+```
+
+Pass all three callbacks and you get `['elicitation', 'sampling', 'roots']`. Pass none and you get `[]`.
+
+!!! check
+    Now do the wrong thing: connect **without** `elicitation_callback` and call `issue_card` anyway.
+
+    The server's `elicitation/create` request still reaches your client, and the SDK answers it for
+    you, with an error, because you never said you could handle it. That error sinks the whole call.
+    `call_tool` doesn't return an `is_error` result; it raises:
+
+    ```text
+    MCPError: Elicitation not supported
+    ```
+
+    That is a protocol error (`-32600`, *invalid request*), not a tool error: there is nothing for
+    the model to read and retry. It's why `client_features` is worth having: a well-behaved server
+    checks before it asks.
+
+## The deprecated pair
+
+`sampling_callback` answers `sampling/createMessage`: the server asking *your* model to complete something. `list_roots_callback` answers `roots/list`: the server asking which directories it may work in.
+
+Both work. Both follow the rule above. And both serve RPCs the **2026-07-28 spec removes**: a modern server doesn't call back into your client mid-request, it hands the request back to you as part of the tool result (**[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**). The callbacks themselves are not dead. When an `InputRequiredResult` carries a `CreateMessageRequest` or a `ListRootsRequest`, `Client`'s auto-loop dispatches it to the same `sampling_callback` or `list_roots_callback` you registered here. The whole list is in **[Deprecated features](https://py.sdk.modelcontextprotocol.io/deprecated/index.md)**.
+
+You still need the callbacks to talk to servers that haven't moved. The signatures:
+
+```python title="client.py"
+# docs_src/client_callbacks/tutorial004.py
+from pydantic import FileUrl
+
+from mcp.client import ClientRequestContext
+from mcp.types import CreateMessageRequestParams, CreateMessageResult, ListRootsResult, Root, TextContent
+
+
+async def handle_sampling(
+    context: ClientRequestContext,
+    params: CreateMessageRequestParams,
+) -> CreateMessageResult:
+    return CreateMessageResult(
+        role="assistant",
+        content=TextContent(type="text", text="The answer is 42."),
+        model="my-llm",
+    )
+
+
+async def handle_list_roots(context: ClientRequestContext) -> ListRootsResult:
+    return ListRootsResult(roots=[Root(uri=FileUrl("file:///home/ada/notebooks"), name="notebooks")])
+```
+
+* A sampling callback receives the full `CreateMessageRequestParams` (`messages`, `model_preferences`, `max_tokens`) and returns a `CreateMessageResult`. *You* run the model, however you like; the SDK only carries the request.
+* A roots callback takes no params at all and returns a `ListRootsResult`.
+* Either one may return `ErrorData(...)` instead, to refuse.
+
+Pass them to `Client(...)` exactly like `elicitation_callback`.
+
+## The notification callbacks
+
+Two more. Neither declares anything.
+
+`logging_callback` receives the `notifications/message` a server sends, as `LoggingMessageNotificationParams` (`level`, `logger`, `data`). Protocol logging is itself deprecated by the 2026-07-28 spec (**[Logging](https://py.sdk.modelcontextprotocol.io/handlers/logging/index.md)** has what to do instead), so this callback exists for the servers that still emit it. On a 2026-era connection the callback alone gets you nothing, because 2026 servers send log messages only to requests that opt in: pass `log_level="info"` (or another level) to `Client(...)` to stamp that opt-in on every request and receive that level and above. Pre-2026 servers ignore it and keep their `logging/setLevel` behavior.
+
+`message_handler` is the catch-all: every server notification the session surfaces reaches it (as well as its specific callback), and on a stream-backed transport so does every transport-level `Exception`. Two never do: `notifications/cancelled` is applied by the SDK rather than surfaced, and a subscription acknowledgment for a live `listen()` stream is consumed by that stream. Annotate the parameter with `IncomingMessage` (`ServerNotification | Exception`, exported from `mcp.client`). The one pattern worth knowing is `if isinstance(message, Exception): raise message`, so a broken connection fails loudly instead of vanishing.
+
+## Recap
+
+* A server can send requests to the client. You answer them with callbacks passed to `Client(...)`.
+* The elicitation callback is the current one: `async (context, params) -> ElicitResult`, one function for both form and URL mode.
+* **Registering a callback is declaring the capability.** Without it, the SDK refuses the server's request on your behalf and the whole call fails with `MCPError`.
+* A server finds out before asking with `ctx.session.check_client_capability(...)`.
+* `sampling_callback` and `list_roots_callback` work the same way but serve deprecated features; modern servers use multi-round-trip requests instead.
+* `logging_callback` and `message_handler` receive notifications. They declare nothing.
+
+The first argument to `Client(...)` picks the transport. **[Client transports](https://py.sdk.modelcontextprotocol.io/client/transports/index.md)** covers every kind.
+
+# Transports
+
+Source: https://py.sdk.modelcontextprotocol.io/client/transports/
+
+Every `Client` talks to its server over a **transport**: the thing that actually carries the messages.
+
+You never configure one separately. `Client` takes a single positional argument and works the transport out from its type.
+
+The *server* side of each (what `mcp.run()` does and what you deploy) is **[Running your server](https://py.sdk.modelcontextprotocol.io/run/index.md)**.
+
+## Streamable HTTP
+
+Pass a URL string and you get **Streamable HTTP**, the transport you deploy behind and the one to reach for first:
+
+```python title="client.py" hl_lines="5"
+# docs_src/client_transports/tutorial002.py
+from mcp import Client
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        result = await client.list_tools()
+        print([tool.name for tool in result.tools])
+```
+
+That is the whole production client. `Client` wraps the URL in `streamable_http_client(...)` for you, on top of an `httpx2.AsyncClient` configured the way MCP needs: a 30-second timeout for connect/write/pool, and a 300-second read timeout because the server may hold a response stream open.
+
+!!! check
+    A `Client` you have constructed is **not** connected. Construction only picks the transport;
+    `async with` is what opens it. Reach for the connection before entering and the SDK tells you so:
+
+    ```text
+    RuntimeError: Client must be used within an async context manager
+    ```
+
+    Nothing was resolved, fetched or spawned when you wrote `Client("http://...")`. That line is free.
+
+### Bring your own `httpx2.AsyncClient`
+
+The moment you need an `Authorization` header, a cookie, a proxy, mTLS, or a different timeout, build the `httpx2.AsyncClient` yourself and hand it to `streamable_http_client`:
+
+```python title="client.py" hl_lines="8-13"
+# docs_src/client_transports/tutorial003.py
+import httpx2
+
+from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
+
+
+async def main() -> None:
+    async with httpx2.AsyncClient(
+        headers={"Authorization": "Bearer ..."},
+        timeout=httpx2.Timeout(30.0, read=300.0),
+    ) as http_client:
+        transport = streamable_http_client("http://localhost:8000/mcp", http_client=http_client)
+        async with Client(transport) as client:
+            result = await client.list_tools()
+            print([tool.name for tool in result.tools])
+```
+
+Two things to notice:
+
+* You own the `httpx2.AsyncClient`, so **you** enter and exit it. The SDK never closes a client it didn't create.
+* `streamable_http_client(url, http_client=...)` returns a transport, and `Client(transport)` accepts it like anything else.
+
+One TLS note: `httpx2` verifies certificates against the operating system trust store (via
+[`truststore`](https://pypi.org/project/truststore/)), not a bundled CA list. In an environment with
+no usable system CA store (some minimal containers), set the standard `SSL_CERT_FILE`/`SSL_CERT_DIR`
+environment variables or pass an explicit `verify=ssl_context` to your `httpx2.AsyncClient`
+(background in
+[`httpx` and `httpx-sse` replaced by `httpx2`](https://py.sdk.modelcontextprotocol.io/migration/index.md#httpx-and-httpx-sse-replaced-by-httpx2)).
+
+!!! warning
+    `streamable_http_client` used to take `headers=` and `timeout=` directly. It does not any more:
+    its only parameters are `url`, `http_client` and `terminate_on_close`. Reach for `headers=` out
+    of habit and you get:
+
+    ```text
+    TypeError: streamable_http_client() got an unexpected keyword argument 'headers'
+    ```
+
+    Everything HTTP-shaped now lives on the one `httpx2.AsyncClient` you pass in.
+
+!!! info
+    `httpx2` keeps the familiar `httpx` API, so if you know `httpx` you already know how to do auth,
+    proxies, event hooks, retries and connection limits here. The SDK adds nothing on top and takes
+    nothing away, except [redirect handling](#redirects). It is also where OAuth plugs in:
+    `httpx2.AsyncClient(auth=OAuthClientProvider(...))`. That whole flow is **[OAuth clients](https://py.sdk.modelcontextprotocol.io/client/oauth-clients/index.md)**.
+
+### Redirects
+
+The transport connects to the URL you gave it, and only that origin.
+
+* A `307`/`308` redirect that stays on the same scheme, host and port is followed, and so is `http://` → `https://` on the same host. That covers the usual `/mcp` → `/mcp/` trailing-slash redirect.
+* A redirect anywhere else is **not** followed. The call fails with:
+
+    ```text
+    MCPError: Redirect to https://other.example.com/mcp not followed; use that URL as the endpoint if it is the intended server
+    ```
+
+    If that URL is the server you meant, put it in your config. If it isn't, the server or a proxy in front of it is misconfigured.
+
+This holds for any `httpx2.AsyncClient` you pass in: its `follow_redirects` setting is not consulted for MCP requests, in either direction. The SDK's OAuth providers apply the same rule to their own requests.
+
+!!! tip
+    `Redirect to http://… not followed: it would downgrade this HTTPS endpoint to plain HTTP` means the
+    server sits behind a TLS-terminating proxy it doesn't know about and is issuing `http://` redirects.
+    That is fixed on the server (**[Deploy & scale](https://py.sdk.modelcontextprotocol.io/run/deploy/index.md#behind-a-tls-terminating-proxy)**),
+    or by using the exact `https://…/` URL the message suggests.
+
+## stdio
+
+A **stdio** server is a subprocess. The client launches it, writes JSON-RPC to its stdin and reads JSON-RPC from its stdout. It is how a desktop host runs a server on your machine: a host *is* this code plus a UI, and **[Connect to a real host](https://py.sdk.modelcontextprotocol.io/get-started/real-host/index.md)** is the same relationship seen from the host's side, as a config file.
+
+Describe the process with `StdioServerParameters` and hand it to `Client`:
+
+```python title="client.py" hl_lines="3-7 11"
+# docs_src/client_transports/tutorial004.py
+from mcp import Client, StdioServerParameters
+
+server = StdioServerParameters(
+    command="uv",
+    args=["run", "server.py"],
+    env={"BOOKSHOP_API_KEY": "secret"},
+)
+
+
+async def main() -> None:
+    async with Client(server) as client:
+        result = await client.list_tools()
+        print([tool.name for tool in result.tools])
+```
+
+Entering the block spawns the process. Leaving it shuts the subprocess down: close stdin, wait, kill if it lingers. You never clean it up yourself.
+
+The child's stderr goes to yours. To send it somewhere else, build the transport yourself with `stdio_client` (from `mcp`) and pass that instead: `Client(stdio_client(server, errlog=log_file))`.
+
+!!! warning
+    The child does **not** inherit your environment. It gets a minimal allow-list (`HOME`, `LOGNAME`,
+    `PATH`, `SHELL`, `TERM` and `USER` on POSIX) so nothing sensitive leaks into a process you may
+    not have written.
+
+    A server that needs an API key won't find it there. Pass it explicitly with `env=`; those
+    variables are merged on top of the allow-list. That is what `BOOKSHOP_API_KEY` is doing above.
+
+## In memory
+
+In a test there is nothing to deploy and nothing to launch. Pass the server object itself:
+
+```python hl_lines="14"
+# docs_src/client_transports/tutorial001.py
+from mcp import Client
+from mcp.server import MCPServer
+
+mcp = MCPServer("Bookshop")
+
+
+@mcp.tool()
+def search_books(query: str) -> str:
+    """Search the catalog by title or author."""
+    return f"Found 3 books matching {query!r}."
+
+
+async def main() -> None:
+    async with Client(mcp) as client:
+        result = await client.call_tool("search_books", {"query": "dune"})
+        print(result.structured_content)
+```
+
+No subprocess, no port, no bytes on a wire. The client and the server are two objects in the same process, and the call still goes through the real protocol layer: `search_books` is listed, validated and invoked exactly as it would be over HTTP. **[Testing](https://py.sdk.modelcontextprotocol.io/get-started/testing/index.md)** builds the whole pattern around it.
+
+The same form doubles as an embedding API: an application that constructs the server itself can call its tools without a network hop.
+
+## SSE
+
+`sse_client(url)`, from `mcp.client.sse`, is the HTTP transport that Streamable HTTP superseded. Wrap it the same way, `Client(sse_client("http://localhost:8000/sse"))`, to talk to a server that still speaks it, and don't build anything new on it.
+
+## The `Transport` protocol
+
+To `Client`, all of the above are the same thing.
+
+A **transport** is any async context manager that yields a `(read, write)` pair of message streams: formally, the `Transport` protocol in `mcp.client`. `Client` resolves its argument by type: a `str` becomes `streamable_http_client(url)`, a `StdioServerParameters` becomes `stdio_client(params)`, a server object connects in-process, and anything else is entered as a transport directly. That last rule is why `stdio_client(...)`, `streamable_http_client(...)` and `sse_client(...)` all drop into the same slot, and why you can write your own.
+
+## Recap
+
+* `Client("http://.../mcp")` (a URL) connects over Streamable HTTP, the production transport.
+* Headers, auth, proxies and timeouts belong on an `httpx2.AsyncClient` you pass to `streamable_http_client(url, http_client=...)`. There is no `headers=` keyword.
+* Redirects are followed only within the URL's own origin (a trailing-slash `307`/`308`), plus `http`→`https` on the same host. Anything else fails with `Redirect to … not followed`; configure the final URL.
+* stdio is `Client(StdioServerParameters(...))`. Wrap it in `stdio_client(...)` yourself only to redirect the child's stderr.
+* The subprocess gets an allow-listed environment, not yours; `env=` adds to it.
+* `Client(mcp)` (the server object) connects in memory. Use it in tests, or to embed a server in the application that built it.
+* A transport is anything you can `async with x as (read, write)`. `Client` hands anything that isn't a server object, a URL or `StdioServerParameters` straight to that protocol.
+* Constructing a `Client` picks the transport. `async with` opens it.
+
+Once the transport is open the two sides have to agree on a protocol version. You normally never think about it; when you do, **[Protocol versions](https://py.sdk.modelcontextprotocol.io/protocol-versions/index.md)** is the page.
+
+# OAuth
+
+Source: https://py.sdk.modelcontextprotocol.io/client/oauth-clients/
+
+Some MCP servers are protected. Send them a request without a token and they answer `401 Unauthorized`.
+
+**`OAuthClientProvider`** is how you get the token. It is not an MCP object at all. It is an `httpx2.Auth`, the standard httpx2 hook for "do something to every request". You attach it to an `httpx2.AsyncClient`, hand that client to the Streamable HTTP transport, and stop thinking about it.
+
+This page is the client side. Making your own server demand a token is **[Authorization](https://py.sdk.modelcontextprotocol.io/run/authorization/index.md)**.
+
+## The provider
+
+```python title="client.py" hl_lines="44-54"
+# docs_src/oauth_clients/tutorial001.py
+from urllib.parse import parse_qs, urlparse
+
+import httpx2
+from pydantic import AnyUrl
+
+from mcp import Client
+from mcp.client.auth import AuthorizationCodeResult, OAuthClientProvider
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
+
+
+class InMemoryTokenStorage:
+    def __init__(self) -> None:
+        self.tokens: OAuthToken | None = None
+        self.client_info: OAuthClientInformationFull | None = None
+
+    async def get_tokens(self) -> OAuthToken | None:
+        return self.tokens
+
+    async def set_tokens(self, tokens: OAuthToken) -> None:
+        self.tokens = tokens
+
+    async def get_client_info(self) -> OAuthClientInformationFull | None:
+        return self.client_info
+
+    async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
+        self.client_info = client_info
+
+
+async def open_browser(authorization_url: str) -> None:
+    print(f"Visit: {authorization_url}")
+
+
+async def wait_for_callback() -> AuthorizationCodeResult:
+    redirect_url = input("Paste the URL you were redirected to: ")
+    params = parse_qs(urlparse(redirect_url).query)
+    return AuthorizationCodeResult(
+        code=params["code"][0],
+        state=params["state"][0],
+        iss=params["iss"][0] if "iss" in params else None,
+    )
+
+
+oauth = OAuthClientProvider(
+    server_url="http://localhost:8001/mcp",
+    client_metadata=OAuthClientMetadata(
+        client_name="Bookshop Agent",
+        redirect_uris=[AnyUrl("http://localhost:3030/callback")],
+        scope="user",
+    ),
+    storage=InMemoryTokenStorage(),
+    redirect_handler=open_browser,
+    callback_handler=wait_for_callback,
+)
+
+
+async def main() -> None:
+    async with httpx2.AsyncClient(auth=oauth) as http_client:
+        transport = streamable_http_client("http://localhost:8001/mcp", http_client=http_client)
+        async with Client(transport) as client:
+            result = await client.list_tools()
+            print([tool.name for tool in result.tools])
+```
+
+You give it four things:
+
+* `server_url`: the MCP endpoint you are connecting to. The provider discovers everything else from it.
+* `client_metadata`: what you would type into an authorization server's "register an application" form.
+* `storage`: where tokens live between runs.
+* `redirect_handler` and `callback_handler`: the two moments a human is involved.
+
+Nothing else in the file mentions OAuth. `main()` never sees a token.
+
+### Client metadata
+
+`OAuthClientMetadata` is the real [RFC 7591](https://datatracker.ietf.org/doc/html/rfc7591) registration document, as a Pydantic model.
+
+You set three fields. The defaults fill in the rest: `grant_types` is already `["authorization_code", "refresh_token"]` and `response_types` is already `["code"]`, which is exactly the flow this provider runs.
+
+!!! check
+    Because it is a Pydantic model, it validates **before a single byte goes over the network**.
+    Leave out `redirect_uris` and construction fails on the spot with a `ValidationError` that
+    names the field:
+
+    ```text
+    redirect_uris
+      Field required [type=missing, input_value={'client_name': 'Bookshop Agent'}, input_type=dict]
+    ```
+
+    No browser opened, no half-finished registration left behind on the authorization server.
+
+### Token storage
+
+**`TokenStorage`** is a `Protocol` with four async methods. You don't inherit from anything; write the methods and any class is a token store:
+
+* `get_tokens` / `set_tokens` hold the `OAuthToken`: access token, refresh token, expiry, scope.
+* `get_client_info` / `set_client_info` hold the `OAuthClientInformationFull` the authorization server issued when the provider registered you, including your `client_id`.
+
+The in-memory version above works. It also forgets everything when the process exits, so the next run does the whole dance again. Persist it to a file or your platform's keyring and the next run is silent.
+
+!!! tip
+    Store `client_info`, not only the tokens. The provider registers dynamically the first time it
+    finds no stored `client_info`. Throw it away and you mint a fresh registration on every run.
+
+### The two handlers
+
+The authorization code flow needs a human exactly once: someone has to sign in and click "allow".
+
+* **`redirect_handler`** is awaited with the fully-built authorization URL. The `client_id`, the `redirect_uri`, the `state` and the PKCE challenge are already in it. Your only job is to get a browser there. A desktop app calls `webbrowser.open`; this file prints it.
+* **`callback_handler`** is awaited next. It waits until the user lands back on your `redirect_uri` and returns that redirect's query parameters as an `AuthorizationCodeResult`.
+
+A real client runs a small local HTTP server on the redirect URI instead of calling `input()`. The shape is identical: get redirected, hand back `code`, `state`, and `iss`.
+
+!!! warning
+    Pass `state` and `iss` through exactly as they arrived. The provider compares `state` to the one
+    it generated and `iss` to the issuer it discovered, and refuses a mismatch. They are the CSRF
+    and server-mix-up defences.
+
+### Into the `Client`
+
+Look at `main()`. The provider goes on the **httpx2 client**, the httpx2 client goes into `streamable_http_client(url, http_client=...)`, and that transport goes into `Client`.
+
+`streamable_http_client` has no `auth=` keyword. Anything HTTP-level (auth, headers, timeouts, proxies) belongs on the `httpx2.AsyncClient` you bring. That layering is **[Client transports](https://py.sdk.modelcontextprotocol.io/client/transports/index.md)**.
+
+## What the provider does for you
+
+The first time `Client` sends a request, the server answers `401`. The provider takes over:
+
+1. **Discovery.** It reads the `WWW-Authenticate` header, fetches the server's Protected Resource Metadata from `/.well-known/oauth-protected-resource`, learns which authorization server protects this resource, and fetches *that* server's metadata. (An older server that publishes no resource metadata is asked for authorization server metadata at its own origin instead.) Either way the metadata must name, as its `issuer`, the server it was fetched for; anything else is refused.
+2. **Registration.** Nothing in storage? It registers you dynamically with your `OAuthClientMetadata` and stores the result.
+3. **Authorization.** It generates the PKCE pair and a `state`, builds the authorization URL, awaits your `redirect_handler`, then awaits your `callback_handler` for the code.
+4. **Exchange.** It trades the code for an `OAuthToken`, stores it, and replays your original request with `Authorization: Bearer ...`.
+
+After that it is quiet. Tokens come out of storage, an expired access token is refreshed with the refresh token, and only when none of that works does it run the flow again.
+
+One transport rule applies to all of these requests: like the MCP request they run inside, they follow a redirect only when it stays on the same origin and keeps the method (a trailing-slash 307/308, say), and treat any other redirect as that URL not answering.
+
+You wrote none of it. Two keyword arguments remain (`client_metadata_url` and `validate_resource_url`), and this file needs neither. `client_metadata_url` is the one worth knowing about; it gets its own section below.
+
+### Try it
+
+The in-memory `Client(server)` your tests use is no help here: the whole point of the flow is an HTTP `401`, and there is no HTTP between an in-memory client and its server.
+
+The repository ships the live version. `examples/servers/simple-auth/` runs a standalone authorization server and a protected MCP server; `examples/clients/simple-auth-client/` is this page's client grown into a small CLI. Its README has the two commands: start the servers, run the client against them, and you watch the four steps go by.
+
+## Client ID Metadata Documents
+
+The 2026-07-28 revision of the spec deprecates dynamic client registration in favor of **Client ID Metadata Documents** (CIMD). Instead of POSTing a fresh registration to every authorization server it meets, your client publishes one JSON document about itself at a stable HTTPS URL, and that URL *is* its `client_id`. The authorization server fetches the document; the provider never touches it.
+
+The SDK already speaks it: pass the URL as `client_metadata_url=` when you construct the provider. When the authorization server's metadata advertises `client_id_metadata_document_supported: true`, the provider skips the `/register` request entirely: the URL goes into the flow as the `client_id`, and there is no `client_secret`. When the server doesn't advertise it (most don't yet), or you never pass a URL, the provider falls back to dynamic registration **silently**, and everything above works exactly as described. Stored `client_info` still wins over both.
+
+The URL must be HTTPS with a non-root path; anything else is a `ValueError` at construction, before any network happens. The shipped `examples/clients/simple-auth-client/` takes it as the `MCP_CLIENT_METADATA_URL` environment variable.
+
+## Machine to machine
+
+A nightly job, a CI step, another service. There is no browser and nobody to click "allow". That is the **client credentials** grant: you already hold a `client_id` and a `client_secret`, and the token endpoint is the whole flow.
+
+`ClientCredentialsOAuthProvider` is the same `httpx2.Auth`, minus the human:
+
+```python title="client.py" hl_lines="4 27-34"
+# docs_src/oauth_clients/tutorial002.py
+import httpx2
+
+from mcp import Client
+from mcp.client.auth.extensions.client_credentials import ClientCredentialsOAuthProvider
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
+
+
+class InMemoryTokenStorage:
+    def __init__(self) -> None:
+        self.tokens: OAuthToken | None = None
+        self.client_info: OAuthClientInformationFull | None = None
+
+    async def get_tokens(self) -> OAuthToken | None:
+        return self.tokens
+
+    async def set_tokens(self, tokens: OAuthToken) -> None:
+        self.tokens = tokens
+
+    async def get_client_info(self) -> OAuthClientInformationFull | None:
+        return self.client_info
+
+    async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
+        self.client_info = client_info
+
+
+oauth = ClientCredentialsOAuthProvider(
+    server_url="http://localhost:8001/mcp",
+    storage=InMemoryTokenStorage(),
+    client_id="reporting-agent",
+    client_secret="...",
+    scope="user",
+    issuer="http://localhost:9000",
+)
+
+
+async def main() -> None:
+    async with httpx2.AsyncClient(auth=oauth) as http_client:
+        transport = streamable_http_client("http://localhost:8001/mcp", http_client=http_client)
+        async with Client(transport) as client:
+            result = await client.list_tools()
+            print([tool.name for tool in result.tools])
+```
+
+What changed:
+
+* No `OAuthClientMetadata`, no handlers. You pass `client_id` and `client_secret`; the provider builds a minimal `client_credentials` registration around them and skips dynamic registration entirely.
+* `issuer` names the authorization server that issued those credentials; use the `issuer` value its `/.well-known/oauth-authorization-server` document returns. Discovery still runs as above, but token requests are only ever built from metadata for *that* issuer; if the MCP server points anywhere else, the flow stops with an `OAuthFlowError` instead. Leaving it out is deprecated and it becomes required in 3.0 (see **[Deprecated features](https://py.sdk.modelcontextprotocol.io/deprecated/index.md#deprecated-sdk-helpers)**); until then the provider warns and uses whichever authorization server discovery finds.
+* `scope` is a space-separated string, the OAuth wire format.
+* Everything downstream is identical: the same `TokenStorage`, the same `httpx2.AsyncClient(auth=...)`, the same `streamable_http_client`.
+
+By default the secret travels as HTTP Basic auth on the token request (`client_secret_basic`). Pass `token_endpoint_auth_method="client_secret_post"` to put it in the form body instead. Some authorization servers only accept one of the two.
+
+!!! tip
+    Read `client_secret` from the environment or a secret manager, never from source control.
+
+!!! info
+    One more provider lives in `mcp.client.auth.extensions.client_credentials`:
+    **`PrivateKeyJWTOAuthProvider`**, for clients that authenticate with a JWT instead of a
+    shared secret (`private_key_jwt`, the key-pair and workload-identity flavour). It follows
+    the same pattern: construct one (it takes the same optional `issuer`), put it on `auth=`. The same module ships
+    `SignedJWTParameters` and `static_assertion_provider`, two helpers that build its assertion.
+
+There is one more no-human situation: the client belongs to an enterprise whose identity provider, not the user, decides which MCP servers it may reach. That is a different grant with its own trust model and its own page, **[Identity assertion](https://py.sdk.modelcontextprotocol.io/client/identity-assertion/index.md)**.
+
+## When it fails
+
+When the OAuth flow goes wrong, the provider raises an `OAuthFlowError` from `mcp.client.auth`. It has two subclasses. `OAuthRegistrationError` means registration did not yield a client you can use: the authorization server refused to register you, or it did register you but with credentials this flow cannot use (for instance an authentication method it does not implement). `OAuthTokenError` means a token could not be obtained: the token endpoint said no, or a stored client record carries an authentication method this client cannot apply, which is reported while building the token request rather than sent. One `except OAuthFlowError:` covers discovery, registration, authorization, and exchange.
+
+Not everything is a flow error. The network can still fail; those are ordinary `httpx2` exceptions and pass through untouched.
+
+## Recap
+
+* `OAuthClientProvider` is an `httpx2.Auth`. Put it on an `httpx2.AsyncClient`, pass that to `streamable_http_client(url, http_client=...)`, and `Client` never knows OAuth happened.
+* You supply four things: the server URL, an `OAuthClientMetadata`, a `TokenStorage`, and the redirect/callback handler pair.
+* `TokenStorage` is a `Protocol`: four async methods, no base class. Persist `client_info` as well as the tokens.
+* Discovery, registration (dynamic, or via a **Client ID Metadata Document**), PKCE, the `state` and `iss` checks, and token refresh are the provider's job, not yours.
+* `ClientCredentialsOAuthProvider` is the no-human version: `client_id` + `client_secret`, no handlers, no browser.
+* Every OAuth failure is an `OAuthFlowError`; `OAuthRegistrationError` and `OAuthTokenError` are its subclasses.
+
+The other half of this handshake, making your *server* demand the token, is **[Authorization](https://py.sdk.modelcontextprotocol.io/run/authorization/index.md)**.
+
+# Identity assertion
+
+Source: https://py.sdk.modelcontextprotocol.io/client/identity-assertion/
+
+An ordinary OAuth provider (**[OAuth clients](https://py.sdk.modelcontextprotocol.io/client/oauth-clients/index.md)**) starts by asking the MCP server a question: *which authorization server do you trust?* It follows the answer wherever it points, and then either a person signs in or a pre-shared secret stands in for one.
+
+An enterprise wants neither decided per server. It already runs an identity provider (Okta, Microsoft Entra ID, your own); the user already signed in to it this morning; and it is the one place the security team wants to decide who may reach what. [SEP-990](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/990), the **Enterprise-Managed Authorization** extension, moves the decision there. The IdP signs a short-lived JWT, an **Identity Assertion JWT Authorization Grant**, the **ID-JAG**: a statement that *this user*, through *this client*, may reach *this MCP server*. The client trades it for an ordinary access token. No browser, no consent screen, no dynamic registration.
+
+This page is both ends of that trade. The MCP server itself never changes: it is still the resource server from **[Authorization](https://py.sdk.modelcontextprotocol.io/run/authorization/index.md)**, checking whatever token shows up.
+
+## Two token requests
+
+Two different authorities are in play, and naming them apart is most of understanding this page. The **enterprise IdP** is your organization's identity provider: it knows who the employee is, it is where policy lives, and it issues the ID-JAG. The SDK never talks to it. The **MCP authorization server** is the same party it was in **[Authorization](https://py.sdk.modelcontextprotocol.io/run/authorization/index.md)**: the issuer named in the MCP server's metadata, the thing that mints the tokens that MCP server accepts. In an ordinary OAuth flow, those two roles are usually one box. Here they are two, and the whole grant is the second agreeing to trust the first.
+
+The client makes one token request to each.
+
+1. **To the enterprise IdP.** The client trades the user's sign-in (their OpenID Connect ID token) for the ID-JAG. This is an [RFC 8693](https://datatracker.ietf.org/doc/html/rfc8693) token exchange, it is entirely your IdP's API, and **the SDK does not make it**. You do, inside one async callback. It is also where the policy decision happens: an IdP that says no never issues the ID-JAG, and there is nothing to present.
+2. **To the MCP authorization server.** The client presents the ID-JAG under the [RFC 7523](https://datatracker.ietf.org/doc/html/rfc7523) `jwt-bearer` grant (`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`, the ID-JAG as `assertion`) and receives the access token. **This is the request the SDK makes**, and accepting it is the one thing this page adds to an authorization server.
+
+Everything below is the second request: the client that sends it and the authorization server that answers it.
+
+## The client
+
+**`IdentityAssertionOAuthProvider`** lives in `mcp.client.auth.extensions.identity_assertion`. Like every provider in **[OAuth clients](https://py.sdk.modelcontextprotocol.io/client/oauth-clients/index.md)** it is an `httpx2.Auth`: construct one, put it on `auth=`, hand the `httpx2.AsyncClient` to the transport.
+
+```python title="client.py" hl_lines="49-50 53-61"
+# docs_src/identity_assertion/tutorial001.py
+import time
+import uuid
+
+import httpx2
+import jwt
+
+from mcp import Client
+from mcp.client.auth.extensions.identity_assertion import IdentityAssertionOAuthProvider
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
+
+IDP_SIGNING_KEY = "the-enterprise-idp-signing-key-for-this-demo"
+
+
+class InMemoryTokenStorage:
+    def __init__(self) -> None:
+        self.tokens: OAuthToken | None = None
+        self.client_info: OAuthClientInformationFull | None = None
+
+    async def get_tokens(self) -> OAuthToken | None:
+        return self.tokens
+
+    async def set_tokens(self, tokens: OAuthToken) -> None:
+        self.tokens = tokens
+
+    async def get_client_info(self) -> OAuthClientInformationFull | None:
+        return self.client_info
+
+    async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
+        self.client_info = client_info
+
+
+def idp_issue_id_jag(subject: str, audience: str, resource: str) -> str:
+    now = int(time.time())
+    claims = {
+        "iss": "https://idp.example.com",
+        "sub": subject,
+        "aud": audience,
+        "client_id": "finance-agent",
+        "resource": resource,
+        "scope": "notes:read",
+        "jti": str(uuid.uuid4()),
+        "iat": now,
+        "exp": now + 300,
+    }
+    return jwt.encode(claims, IDP_SIGNING_KEY, algorithm="HS256", headers={"typ": "oauth-id-jag+jwt"})
+
+
+async def fetch_id_jag(audience: str, resource: str) -> str:
+    return idp_issue_id_jag("alice@example.com", audience, resource)
+
+
+oauth = IdentityAssertionOAuthProvider(
+    server_url="http://localhost:8001/mcp",
+    storage=InMemoryTokenStorage(),
+    client_id="finance-agent",
+    client_secret="finance-agent-secret",
+    issuer="https://auth.example.com/",
+    assertion_provider=fetch_id_jag,
+    scope="notes:read",
+)
+
+
+async def main() -> None:
+    async with httpx2.AsyncClient(auth=oauth) as http_client:
+        transport = streamable_http_client("http://localhost:8001/mcp", http_client=http_client)
+        async with Client(transport) as client:
+            result = await client.list_tools()
+            print([tool.name for tool in result.tools])
+```
+
+Read it from the bottom.
+
+* `main()` is the standard OAuth-client `main()` (**[OAuth clients](https://py.sdk.modelcontextprotocol.io/client/oauth-clients/index.md)**), unchanged line for line. That is the point: once the provider exists, nothing downstream knows which grant produced the token.
+* The provider takes what the other providers cannot discover: a `client_id` and `client_secret` somebody **pre-registered** with the authorization server, that authorization server's `issuer`, and `assertion_provider`, an async callback that returns a fresh ID-JAG on demand.
+* `storage` is the same `TokenStorage` protocol. Only the two token methods are ever called; there is no dynamic registration here, so there is no `client_info` to remember.
+
+### The assertion provider
+
+`fetch_id_jag(audience, resource)` is the only code you write. It is awaited once per token exchange, never at construction, and only *after* the authorization server's metadata has been fetched and validated, so a misconfigured issuer never leaks an assertion. Its two arguments are two of the claims the ID-JAG must be minted with: `audience` is the authorization server's issuer (the ID-JAG `aud`) and `resource` is the MCP server's canonical identifier (the ID-JAG `resource`). The third is one you already hold: the ID-JAG's `client_id` claim must name the `client_id` you gave the provider, or the authorization server refuses the exchange.
+
+`idp_issue_id_jag` above it is **not your code**. It stands in for the identity provider, signing the assertion in-process so the file is complete and you can read every claim an ID-JAG carries. A real `fetch_id_jag` makes the first token request of the previous section instead: an [RFC 8693](https://datatracker.ietf.org/doc/html/rfc8693) token exchange against your IdP, defined by the Identity Assertion JWT Authorization Grant draft that [SEP-990](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/990) profiles. The signed-in user's ID token goes in as the `subject_token`, the `requested_token_type` is the ID-JAG's own URN (`urn:ietf:params:oauth:token-type:id-jag`), `audience` and `resource` pass straight through, and the response carries the ID-JAG. That exchange, under those names, is what to look for in your IdP's documentation.
+
+!!! tip
+    A fresh ID-JAG is requested for every exchange, and that is the point: it is a single-use,
+    minutes-lived grant, and the authorization server on this page refuses to accept the same one
+    twice. Do not cache it. The access token it buys you is the thing that gets reused.
+
+### The issuer is configuration
+
+Here is the inversion. `OAuthClientProvider` asks the resource server which authorization server to use and follows the answer wherever it points. This provider refuses to: `issuer` is required, the [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414) metadata is fetched from that issuer's own well-known path, the token endpoint must be on that issuer's origin, and the resource server is never asked anything.
+
+The extension does not demand this; it is a deliberately stricter choice. This client carries two things worth stealing, a pre-registered secret and an audience-bound assertion, and a client that let a compromised MCP server steer it to an attacker's authorization server would post both to it. Pinning the issuer at construction deletes that conversation.
+
+!!! warning
+    The configured `issuer` is compared to the metadata document's `issuer` field by RFC 8414 §3.3
+    simple string comparison: character for character, trailing slash included, no normalization.
+    Do not guess it. Fetch `/.well-known/oauth-authorization-server` from your authorization server
+    and copy the `issuer` value it returns. For the authorization server on this page that is
+    `https://auth.example.com/`, with the slash, because its issuer was built from a pydantic URL
+    object. A mismatch stops the flow at `OAuthFlowError: Authorization server metadata issuer
+    mismatch` before a single credential or assertion is sent.
+
+### A confidential client
+
+`client_secret` is required; the constructor raises `ValueError` without one. The IETF profile underneath [SEP-990](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/990) reserves this grant for confidential clients, SEP-990 requires the client to authenticate, and this SDK enforces both by insisting on a shared secret. `token_endpoint_auth_method` picks where it travels: `client_secret_post` (the default, in the form body) or `client_secret_basic` (an HTTP Basic header). The profile also permits `private_key_jwt`; this provider does not support it.
+
+!!! tip
+    Read `client_secret` from the environment or a secret manager, never from source control.
+
+### What the provider does for you
+
+The first request goes out unauthenticated, and the server's `401` starts the flow.
+
+1. **Discovery.** It fetches the authorization server metadata from the configured issuer's [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414) well-known path, checks the document's `issuer` matches, and checks the token endpoint is on the issuer's origin.
+2. **The assertion.** It awaits your `assertion_provider`.
+3. **Exchange.** It POSTs the `jwt-bearer` grant to the token endpoint, stores the `OAuthToken`, and replays your original request with `Authorization: Bearer ...`.
+
+A `403` whose `WWW-Authenticate` names `insufficient_scope` runs steps 2 and 3 again with the union of your `scope` and the challenged one. (`scope` is only ever a request; this page's authorization server grants what the ID-JAG says and nothing else.) There is no refresh token anywhere in this: when the access token expires, the next `401` mints a fresh ID-JAG and exchanges again, and *that* is the lever the IdP holds. Failures are the same two exceptions as the rest of **[OAuth clients](https://py.sdk.modelcontextprotocol.io/client/oauth-clients/index.md)**: `OAuthFlowError` for discovery and validation, its subclass `OAuthTokenError` when the token endpoint says no.
+
+## The authorization server
+
+Most of the time you stop here. The MCP authorization server is somebody else's product, accepting ID-JAGs is its configuration to turn on, and the SDK's half of [SEP-990](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/990) is the client above.
+
+The SDK can also *be* the authorization server: `create_auth_routes` returns the authorization server's routes as a list any Starlette app can mount, which is how `examples/servers/simple-auth/` in the repository runs one. SEP-990 adds one flag and one method to that surface:
+
+```python title="auth_server.py" hl_lines="48-50 105-107"
+# docs_src/identity_assertion/tutorial002.py
+import secrets
+import time
+
+import jwt
+from pydantic import AnyHttpUrl
+from starlette.applications import Starlette
+
+from mcp.server.auth.provider import (
+    AccessToken,
+    AuthorizationCode,
+    AuthorizationParams,
+    AuthorizeError,
+    IdentityAssertionParams,
+    OAuthAuthorizationServerProvider,
+    RefreshToken,
+    TokenError,
+)
+from mcp.server.auth.routes import create_auth_routes
+from mcp.shared.auth import JWT_BEARER_GRANT_TYPE, OAuthClientInformationFull, OAuthToken
+
+ISSUER = "https://auth.example.com/"
+MCP_SERVER = "http://localhost:8001/mcp"
+IDP_ISSUER = "https://idp.example.com"
+IDP_SIGNING_KEY = "the-enterprise-idp-signing-key-for-this-demo"
+
+REGISTERED_CLIENTS = {
+    "finance-agent": OAuthClientInformationFull(
+        client_id="finance-agent",
+        client_secret="finance-agent-secret",
+        redirect_uris=None,
+        grant_types=[JWT_BEARER_GRANT_TYPE],
+        token_endpoint_auth_method="client_secret_post",
+    )
+}
+
+
+class EnterpriseAuthorizationServer(OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken, AccessToken]):
+    def __init__(self) -> None:
+        self.access_tokens: dict[str, AccessToken] = {}
+        self.seen_jtis: set[str] = set()
+
+    async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
+        return REGISTERED_CLIENTS.get(client_id)
+
+    async def load_access_token(self, token: str) -> AccessToken | None:
+        return self.access_tokens.get(token)
+
+    async def exchange_identity_assertion(
+        self, client: OAuthClientInformationFull, params: IdentityAssertionParams
+    ) -> OAuthToken:
+        try:
+            header = jwt.get_unverified_header(params.assertion)
+            claims = jwt.decode(
+                params.assertion,
+                IDP_SIGNING_KEY,
+                algorithms=["HS256"],
+                issuer=IDP_ISSUER,
+                audience=ISSUER,
+                options={"require": ["iss", "sub", "aud", "exp", "iat", "jti", "client_id", "resource", "scope"]},
+            )
+        except jwt.InvalidTokenError as error:
+            raise TokenError("invalid_grant", "the assertion did not verify") from error
+        if header.get("typ") != "oauth-id-jag+jwt":
+            raise TokenError("invalid_grant", "the assertion is not an ID-JAG")
+        if claims["client_id"] != client.client_id:
+            raise TokenError("invalid_grant", "the assertion was issued to a different client")
+        if claims["resource"] != MCP_SERVER:
+            raise TokenError("invalid_target", "the assertion is for a resource this server does not serve")
+        if claims["jti"] in self.seen_jtis:
+            raise TokenError("invalid_grant", "the assertion has already been used")
+        self.seen_jtis.add(claims["jti"])
+        scopes = claims["scope"].split()
+        access_token = f"mcp_{secrets.token_hex(16)}"
+        self.access_tokens[access_token] = AccessToken(
+            token=access_token,
+            client_id=claims["client_id"],
+            scopes=scopes,
+            expires_at=int(time.time()) + 300,
+            resource=claims["resource"],
+            subject=claims["sub"],
+        )
+        return OAuthToken(access_token=access_token, token_type="Bearer", expires_in=300, scope=" ".join(scopes))
+
+    async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
+        raise AuthorizeError("unauthorized_client", "this authorization server only accepts ID-JAGs")
+
+    async def load_authorization_code(self, client: OAuthClientInformationFull, authorization_code: str) -> None:
+        return None
+
+    async def exchange_authorization_code(
+        self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
+    ) -> OAuthToken:
+        raise TokenError("invalid_grant", "this authorization server only accepts ID-JAGs")
+
+    async def load_refresh_token(self, client: OAuthClientInformationFull, refresh_token: str) -> None:
+        return None
+
+    async def exchange_refresh_token(
+        self, client: OAuthClientInformationFull, refresh_token: RefreshToken, scopes: list[str]
+    ) -> OAuthToken:
+        raise TokenError("invalid_grant", "this authorization server only accepts ID-JAGs")
+
+
+provider = EnterpriseAuthorizationServer()
+auth_app = Starlette(
+    routes=create_auth_routes(provider, issuer_url=AnyHttpUrl(ISSUER), identity_assertion_enabled=True)
+)
+```
+
+* `identity_assertion_enabled=True` gates everything. Off, which is the default, `/token` answers this grant with `unsupported_grant_type` even if you implemented the hook, and the metadata does not mention it. On, the metadata gains the `jwt-bearer` grant type and lists `urn:ietf:params:oauth:grant-profile:id-jag` in `authorization_grant_profiles_supported`, the field the extension uses to advertise support. (This SDK's client never reads it: it is provisioned for one issuer and simply asks.)
+* **`exchange_identity_assertion`** is the hook. Before it runs, the SDK has authenticated the client, refused public clients, and refused clients whose registration does not list the grant. You get an `IdentityAssertionParams` (the raw `assertion`, the requested `scopes` and `resource`) and return a plain `OAuthToken`.
+* Dynamic client registration refuses this grant unconditionally, so `get_client` here serves a hand-provisioned client. An ID-JAG client cannot register itself into existence.
+* Half the class is refusals. `OAuthAuthorizationServerProvider` is the *whole* authorization server, so it also asks for the authorization-code flow; a server that signs users in as well implements those for real, and this one has exactly one door.
+
+!!! warning
+    The SDK never decodes the assertion: only your deployment knows which IdP it trusts and which
+    keys that IdP publishes, so everything inside `exchange_identity_assertion` is load-bearing.
+    Verify the signature against the IdP's published keys (its JWKS; the shared secret here is the
+    demo's), and `iss` and `exp`, per [RFC 7523](https://datatracker.ietf.org/doc/html/rfc7523) §3. Require the JWT header's `typ` to be
+    `oauth-id-jag+jwt`, the profile's guard against some other JWT being replayed as a grant.
+    Require `aud` to be your own issuer. Require the ID-JAG's `client_id` claim to equal the client
+    the handler authenticated, and its `resource` claim to name a resource you actually serve.
+    Track `jti` until the assertion's `exp` so it is accepted once. And take the granted scopes
+    and, above all, the issued token's `resource` from the validated ID-JAG, never from the
+    request: `params.resource` is whatever the client typed. The full processing rules are in the
+    [Enterprise-Managed Authorization specification](https://modelcontextprotocol.io/extensions/auth/enterprise-managed-authorization).
+
+Reject a bad assertion with `TokenError("invalid_grant", ...)`. The other error code in this flow is `invalid_target`: an ID-JAG that names a resource you do not serve is refused with it, which is what stops this server minting tokens for somebody else's. And the granted scopes come from the ID-JAG's `scope` claim (an assertion without one is refused too); yours might map the user's groups instead.
+
+And notice what the returned `OAuthToken` does not carry: a refresh token. The IdP decides how long this user keeps access by deciding whether to issue the next ID-JAG. A refresh token minted here would quietly hand that decision back.
+
+!!! info
+    A server that still embeds its authorization server with `auth_server_provider=` reaches the same
+    code through `AuthSettings(identity_assertion_enabled=True)`. **[Authorization](https://py.sdk.modelcontextprotocol.io/run/authorization/index.md)** explains why new
+    servers should not start there.
+
+!!! check
+    Wire the two files on this page together and the whole grant is one `POST /token`:
+
+    ```text
+    grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer
+    assertion=eyJhbGciOiJIUzI1NiIsInR5cCI6Im9hdXRoLWlkLWphZytqd3QifQ...
+    client_id=finance-agent
+    resource=http://localhost:8001/mcp
+    scope=notes:read
+    client_secret=finance-agent-secret
+
+    HTTP/1.1 200 OK
+    {"access_token": "mcp_...", "token_type": "Bearer", "expires_in": 300, "scope": "notes:read"}
+    ```
+
+    No `/authorize`, no `/register`, no protected-resource-metadata fetch. The only requests on the
+    wire are the one that drew the `401`, the well-known fetch, this exchange, and then ordinary
+    MCP traffic with the bearer attached. And the `sub` your validator read out of the ID-JAG is
+    exactly what `get_access_token().subject` reports inside a tool.
+
+### Try it
+
+`examples/stories/identity_assertion/` in the SDK repository is this page running for real: the same `exchange_identity_assertion` validator, an MCP server gated on its tokens, a stand-in IdP, and the client, in one self-checking program. `uv run python -m stories.identity_assertion.client --http` runs the whole exchange and asserts that the user the IdP named is the user the tool sees.
+
+## Recap
+
+* [SEP-990](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/990) lets the enterprise identity provider, not the end user, decide which MCP servers a client may reach. The IdP signs that decision into an **ID-JAG**.
+* Obtaining the ID-JAG is an [RFC 8693](https://datatracker.ietf.org/doc/html/rfc8693) token exchange against *your IdP*, and the SDK does not make it. Presenting it to the MCP authorization server is the [RFC 7523](https://datatracker.ietf.org/doc/html/rfc7523) `jwt-bearer` grant, and the SDK does both sides of that.
+* `IdentityAssertionOAuthProvider` is another `httpx2.Auth`: a pre-registered confidential client, a pinned `issuer`, and one `assertion_provider(audience, resource)` callback. No browser, no registration, no refresh token.
+* The authorization server is never discovered from the resource server. Configure `issuer` to exactly the string its metadata document serves; the comparison is character for character.
+* Server side, `identity_assertion_enabled=True` plus `exchange_identity_assertion`. The SDK authenticates the client and gates the grant; validating the ID-JAG is entirely yours, and the issued token is bound to the ID-JAG's `resource`, not the request's.
+
+The one party this page never touched is the MCP server. What it does with the token you just minted, it was already doing in **[Authorization](https://py.sdk.modelcontextprotocol.io/run/authorization/index.md)**.
+
+# Multiple servers
+
+Source: https://py.sdk.modelcontextprotocol.io/client/session-groups/
+
+A `Client` connects to one server. Real applications often want several (a search server, a database server, an internal API) and end up juggling a connection and a tool list for each.
+
+**`ClientSessionGroup`** is one object that holds many connections and merges everything they expose into a single view.
+
+## Two servers
+
+Start with two ordinary servers. They have nothing to do with each other, so both naturally called their tool `search`:
+
+```python title="library_server.py" hl_lines="7"
+# docs_src/session_groups/tutorial001.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Library")
+
+
+@mcp.tool()
+def search(query: str) -> str:
+    """Search the library catalog."""
+    return f"3 books match {query!r}."
+
+
+@mcp.resource("library://hours")
+def hours() -> str:
+    """When the library is open."""
+    return "Mon-Fri 09:00-17:00"
+```
+
+```python title="web_server.py" hl_lines="7"
+# docs_src/session_groups/tutorial002.py
+from mcp.server import MCPServer
+
+mcp = MCPServer("Web")
+
+
+@mcp.tool()
+def search(query: str) -> str:
+    """Search the web."""
+    return f"12 pages match {query!r}."
+```
+
+## One group
+
+Create a `ClientSessionGroup` and call **`connect_to_server`** once per server:
+
+```python title="client.py" hl_lines="10-12"
+# docs_src/session_groups/tutorial003.py
+import asyncio
+
+from mcp import ClientSessionGroup, StdioServerParameters
+
+
+async def main() -> None:
+    library = StdioServerParameters(command="uv", args=["run", "mcp", "run", "library_server.py"])
+    web = StdioServerParameters(command="uv", args=["run", "mcp", "run", "web_server.py"])
+
+    async with ClientSessionGroup() as group:
+        await group.connect_to_server(library)
+        await group.connect_to_server(web)
+
+        result = await group.call_tool("search", {"query": "model context protocol"})
+        print(result.structured_content)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+* `connect_to_server` takes transport parameters, not a server object: `StdioServerParameters` (from `mcp`) to launch a subprocess, or `StreamableHttpParameters` / `SseServerParameters` (from `mcp.client.session_group`) for a server already listening on a URL.
+* `group.tools` is a `dict[str, Tool]` of every connected server's tools. `group.resources` and `group.prompts` are the same shape.
+* `group.call_tool(name, arguments)` looks the name up, finds the session that owns it, and forwards the call. You never say which server.
+
+!!! check
+    Put `client.py` next to the two servers and run it. The second `connect_to_server` refuses:
+
+    ```text
+    mcp.shared.exceptions.MCPError: {'search'} already exist in group tools.
+    ```
+
+    That is an `MCPError`, raised before anything from the second server is registered. A name must
+    be unique across the **whole** group, and two servers you don't control will collide eventually.
+
+## `component_name_hook`
+
+You fix this at the group, not at the servers. Pass a function of `(name, server_info)` and the group runs it on every name it registers:
+
+```python title="client.py" hl_lines="7-8 15"
+# docs_src/session_groups/tutorial004.py
+import asyncio
+
+from mcp import ClientSessionGroup, StdioServerParameters
+from mcp.types import Implementation
+
+
+def by_server(name: str, server_info: Implementation) -> str:
+    return f"{server_info.name}.{name}"
+
+
+async def main() -> None:
+    library = StdioServerParameters(command="uv", args=["run", "mcp", "run", "library_server.py"])
+    web = StdioServerParameters(command="uv", args=["run", "mcp", "run", "web_server.py"])
+
+    async with ClientSessionGroup(component_name_hook=by_server) as group:
+        await group.connect_to_server(library)
+        await group.connect_to_server(web)
+
+        print(sorted(group.tools))
+        result = await group.call_tool("Web.search", {"query": "model context protocol"})
+        print(result.structured_content)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Run it again. `print(sorted(group.tools))` now shows both:
+
+```text
+['Library.search', 'Web.search']
+```
+
+* The **key** is yours. `by_server` built it from `server_info.name`, the name each `MCPServer(...)` was constructed with.
+* The `Tool` inside is untouched: `group.tools["Web.search"].name` is still `"search"`, and that is the name `call_tool` puts on the wire. The prefix never leaves your process.
+* It is not only tools. The library's `hours` resource is registered as `Library.hours`.
+
+!!! tip
+    The hook runs on **every** name from **every** server, not only on conflicts: there is no
+    prefix-on-collision mode. Pick one scheme and let it apply everywhere.
+
+## Adding and removing servers
+
+`connect_to_server` returns the `ClientSession` it opened. Keep it if you ever want that server gone: `await group.disconnect_from_server(session)` removes its tools, resources, and prompts from the group.
+
+If you already hold a connected `ClientSession` (`Client.session` is one), hand it to `await group.connect_with_session(server_info, session)` instead of opening a new transport. It aggregates the same way. The group never closes a session it didn't open. `server_info` names the server for component prefixes; on a 2026-era connection `client.server_info` can be `None` (identity is optional), so pass your own `Implementation(name=..., version=...)` in that case.
+
+## The classic handshake
+
+`ClientSessionGroup` is built on `ClientSession`, not on `Client`. Each `connect_to_server` runs the classic `initialize` handshake. It never sends the `server/discover` probe described in **[Protocol versions](https://py.sdk.modelcontextprotocol.io/protocol-versions/index.md)**. Every MCP server understands that handshake, so this costs you compatibility with nothing; it only means a group takes the older, slower path to a server that could do better.
+
+## Recap
+
+* `ClientSessionGroup` holds many server connections and merges their tools, resources, and prompts into one `dict` each.
+* `connect_to_server(params)` per server. It takes transport parameters, never the URL or `Transport` a `Client` takes.
+* `group.call_tool(name, arguments)` routes to the owning server for you.
+* Names must be unique across the whole group; two servers with a `search` tool cannot coexist on their own.
+* `component_name_hook=` rewrites every registered name. The dict key changes, the wire name does not.
+* `connect_with_session` adds a session you already hold; `disconnect_from_server` removes one.
+
+The handshake a group speaks (and the faster one a `Client` prefers) is the subject of **[Protocol versions](https://py.sdk.modelcontextprotocol.io/protocol-versions/index.md)**.
+
+# Subscriptions
+
+Source: https://py.sdk.modelcontextprotocol.io/client/subscriptions/
+
+A server's catalog is not fixed. Tools appear at runtime, and the content behind a resource URI changes. A client hears about it through `client.listen(...)`: one `subscriptions/listen` request whose response *is* the stream. It stays open and carries the change notifications the client asked for.
+
+This page is the client end: opening the stream, watching it beside your main flow, and handling its endings. Publishing changes, filtering, and serving the method are the server's side of the story, told in **[Subscriptions](https://py.sdk.modelcontextprotocol.io/handlers/subscriptions/index.md)** under *Inside your handler*. The examples here talk to the sprint-board server built there.
+
+## Watching the stream
+
+A subscription is one context manager. Entering it sends the request, with your keyword arguments as the subscription filter, and waits for the server's acknowledgment, so the stream is live by the time the block starts.
+
+```python title="client.py" hl_lines="15 18 28"
+# docs_src/subscriptions/tutorial003.py
+from mcp import Client
+from mcp.client.subscriptions import ResourceUpdated, ToolsListChanged
+from mcp.types import TextResourceContents
+
+BOARD = "board://sprint"
+
+
+async def read_board(client: Client, uri: str = BOARD) -> str:
+    [contents] = (await client.read_resource(uri)).contents
+    assert isinstance(contents, TextResourceContents)
+    return contents.text
+
+
+async def follow_board(client: Client) -> None:
+    async with client.listen(tools_list_changed=True, resource_subscriptions=[BOARD]) as sub:
+        async for event in sub:
+            match event:
+                case ResourceUpdated(uri=uri):
+                    print(await read_board(client, uri))
+                case ToolsListChanged():
+                    tools = await client.list_tools()
+                    print("tools:", [tool.name for tool in tools.tools])
+                case _:
+                    pass  # kinds the filter did not ask for never arrive
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        await follow_board(client)
+```
+
+Iteration yields four typed events: `ToolsListChanged`, `PromptsListChanged`, `ResourcesListChanged`, and `ResourceUpdated(uri=...)`.
+
+An event says *what* changed, never *how*. That is why `follow_board` calls `read_resource` and `list_tools`: the event is a cue to refetch. Read `event.uri` rather than assuming which resource moved: a filter can name several URIs, and a server may report a change on a sub-resource of one of them.
+
+Duplicate events waiting to be consumed collapse into one, and refetching still gets you the current state. Only identical events collapse: two `ResourceUpdated` for different URIs are two events.
+
+Two more properties of the handle:
+
+* `sub.honored` is the filter the server acknowledged: a `SubscriptionFilter` with the fields you passed, read as attributes (`sub.honored.prompts_list_changed`). `MCPServer` honors every kind you ask for, so it echoes your request back. A server that supports fewer kinds acknowledges less, and an honored kind may still never fire. A server may also refuse the whole request rather than acknowledge it (see [Deciding who may watch](https://py.sdk.modelcontextprotocol.io/handlers/subscriptions/index.md#deciding-who-may-watch) on the server page), which surfaces as the request's error.
+* `sub.subscription_id` is the listen request's id, the one stamped on every frame of this stream. Several subscriptions can be open at once, each demultiplexed by its own id.
+
+## Watching without blocking
+
+`follow_board` runs until the server closes the stream, which may be never, so on its own it owns your program. Real clients want the watcher *beside* the main flow: an agent calls tools while a watcher keeps a cache or a UI current.
+
+Open the subscription first, then start the watcher and get on with your work.
+
+=== "asyncio"
+
+    ```python title="app.py" hl_lines="18 20"
+    # docs_src/subscriptions/tutorial004_asyncio.py
+    import asyncio
+
+    from mcp import Client
+    from mcp.client.subscriptions import Subscription
+
+    from .tutorial003 import BOARD, read_board
+
+
+    async def watch(client: Client, sub: Subscription) -> None:
+        async for _event in sub:
+            board = await read_board(client)
+            print(board)
+            if "[ ]" not in board:
+                return  # sprint finished: the stream closes when run_sprint leaves the block
+
+
+    async def run_sprint(client: Client) -> None:
+        async with client.listen(resource_subscriptions=[BOARD]) as sub:
+            print(await read_board(client))  # snapshot: acknowledged, so nothing after this is missed
+            watcher = asyncio.create_task(watch(client, sub))
+            for task in ("design", "build", "ship"):
+                await client.call_tool("complete_task", {"board": "sprint", "task": task})
+            await watcher  # returns once the watcher has seen the finished board
+
+
+    async def main() -> None:
+        async with Client("http://localhost:8000/mcp") as client:
+            await run_sprint(client)
+
+
+    if __name__ == "__main__":
+        asyncio.run(main())
+    ```
+
+=== "trio"
+
+    ```python title="app.py" hl_lines="18 21"
+    # docs_src/subscriptions/tutorial004_trio.py
+    import trio
+
+    from mcp import Client
+    from mcp.client.subscriptions import Subscription
+
+    from .tutorial003 import BOARD, read_board
+
+
+    async def watch(client: Client, sub: Subscription) -> None:
+        async for _event in sub:
+            board = await read_board(client)
+            print(board)
+            if "[ ]" not in board:
+                return  # sprint finished: the stream closes when run_sprint leaves the block
+
+
+    async def run_sprint(client: Client) -> None:
+        async with client.listen(resource_subscriptions=[BOARD]) as sub:
+            print(await read_board(client))  # snapshot: acknowledged, so nothing after this is missed
+            async with trio.open_nursery() as nursery:
+                nursery.start_soon(watch, client, sub)
+                for task in ("design", "build", "ship"):
+                    await client.call_tool("complete_task", {"board": "sprint", "task": task})
+
+
+    async def main() -> None:
+        async with Client("http://localhost:8000/mcp") as client:
+            await run_sprint(client)
+
+
+    if __name__ == "__main__":
+        trio.run(main)
+    ```
+
+=== "anyio"
+
+    ```python title="app.py" hl_lines="18 21"
+    # docs_src/subscriptions/tutorial004_anyio.py
+    import anyio
+
+    from mcp import Client
+    from mcp.client.subscriptions import Subscription
+
+    from .tutorial003 import BOARD, read_board
+
+
+    async def watch(client: Client, sub: Subscription) -> None:
+        async for _event in sub:
+            board = await read_board(client)
+            print(board)
+            if "[ ]" not in board:
+                return  # sprint finished: the stream closes when run_sprint leaves the block
+
+
+    async def run_sprint(client: Client) -> None:
+        async with client.listen(resource_subscriptions=[BOARD]) as sub:
+            print(await read_board(client))  # snapshot: acknowledged, so nothing after this is missed
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(watch, client, sub)
+                for task in ("design", "build", "ship"):
+                    await client.call_tool("complete_task", {"board": "sprint", "task": task})
+
+
+    async def main() -> None:
+        async with Client("http://localhost:8000/mcp") as client:
+            await run_sprint(client)
+
+
+    if __name__ == "__main__":
+        anyio.run(main)
+    ```
+
+!!! note
+    `app.py` imports `BOARD` and `read_board` from the first example, which this repo stores as
+    `tutorial003.py`. If you save the rendered files side by side as `client.py` and `app.py`,
+    write `from client import BOARD, read_board` instead. The `watch.py` example further down
+    imports `read_board` the same way.
+
+The order is the point. Nothing is replayed, so an event published before your stream existed is missed. Entering `client.listen(...)` waits for the acknowledgment, so every change from that moment on reaches your watcher, and the snapshot you take inside the block cannot miss one.
+
+Requests run freely beside an open stream, from the watcher task or any other, on the same client. Because *duplicate* unconsumed events coalesce, a busy main flow may produce one refetch rather than three. Events that differ do not coalesce: a filter naming many URIs queues one pending event per URI.
+
+To stop watching, leave the block: there is no `unsubscribe` call. Cancelling the task that owns the block does that for you, and the SDK cancels the listen request the way the transport expects: over streamable HTTP, by closing that request's stream. A watcher that runs for the life of your app never returns on its own, so cancel it, or its task group's scope, at shutdown.
+
+## Streams end
+
+A stream ends in one of two ways, both ordinary control flow. A graceful server close ends the `async for`; an abrupt drop raises `SubscriptionLost`.
+
+The difference is diagnostic, not a difference in what to do next: the stream is gone, nothing was replayed, and a watcher that still cares re-listens and refetches.
+
+```python title="watch.py" hl_lines="16 20"
+# docs_src/subscriptions/tutorial005.py
+import anyio
+
+from mcp import Client
+from mcp.client.subscriptions import SubscriptionLost
+
+from .tutorial003 import read_board
+
+
+async def keep_following(client: Client) -> None:
+    while True:
+        try:
+            async with client.listen(resource_subscriptions=["board://sprint"]) as sub:
+                print(await read_board(client))  # refetch: no replay across streams
+                async for _event in sub:
+                    print(await read_board(client))
+        except SubscriptionLost:
+            pass
+        # Either ending means the stream is gone. Back off before re-listening:
+        # a graceful close may be the server shedding load.
+        await anyio.sleep(1)
+```
+
+Servers close streams gracefully for their own reasons, including shedding a subscriber whose backlog grew too large, so a clean end is not a signal to stop watching. Back off before re-listening.
+
+`SubscriptionLost` has one local cause too. The client holds at most 1024 unconsumed events, and a consumer that falls that far behind loses the subscription rather than grow without bound. Keep the body of the `async for` short and do slow work elsewhere.
+
+`keep_following` catches only `SubscriptionLost`. Entering `listen()` can also raise `MCPError` (the connection failed, or the server does not serve the method), `TimeoutError` (no acknowledgment arrived), and `ListenNotSupportedError` (a pre-2026 connection). Decide which of those your watcher should retry: the last never heals.
+
+## Recap
+
+* Enter `async with client.listen(...)`; entering waits for the acknowledgment, so nothing published after it is missed.
+* Iterate with `async for event in sub`. Events are cues to refetch, never payloads.
+* Open the subscription, then run the watcher as a task, and tool calls keep flowing beside it.
+* A clean end stops the loop; a drop raises `SubscriptionLost`. Either way: re-listen, refetch, back off first.
+* Leaving the block is the unsubscribe.
+
+Publishing these events, narrowing the filter, and scaling past one process are the server's story: **[Subscriptions](https://py.sdk.modelcontextprotocol.io/handlers/subscriptions/index.md)**. These same events also keep a client-side cache honest, and **[Caching](https://py.sdk.modelcontextprotocol.io/client/caching/index.md)** is the next page.
+
+# Caching
+
+Source: https://py.sdk.modelcontextprotocol.io/client/caching/
+
+Every result a server returns for `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, `resources/read` and `server/discover` carries two fields on the 2026-07-28 protocol: `ttlMs`, how many milliseconds a client may treat the result as fresh, and `cacheScope`, whether a cached result may be shared across users (`"public"`) or belongs to one authorization context (`"private"`).
+
+The server doesn't cache anything. The fields are a *declaration*: "this tool list is the same for everyone and won't change for a minute." A client (or a gateway in front of you) may then skip the round trip. Honoring the hints is the client's choice; emitting them is the server's job, and the SDK does it for you.
+
+Out of the box every result says `ttlMs: 0, cacheScope: "private"`: immediately stale, never shared. That is always safe and always conformant. If your lists really are stable and identical for all callers, say so at construction:
+
+```python title="server.py" hl_lines="5-8"
+# docs_src/caching/tutorial001.py
+from mcp.server import CacheHint, MCPServer
+
+mcp = MCPServer(
+    "Weather",
+    cache_hints={
+        "tools/list": CacheHint(ttl_ms=60_000, scope="public"),
+        "resources/read": CacheHint(ttl_ms=5_000),
+    },
+)
+
+
+@mcp.tool()
+def forecast(city: str) -> str:
+    return f"Sunny in {city}"
+
+
+@mcp.resource("config://units")
+def units() -> str:
+    return "metric"
+```
+
+* The map is keyed by **method name**, and the six cacheable methods are the only legal keys. The parameter is typed `Mapping[CacheableMethod, CacheHint]`, so your editor autocompletes the keys and flags a typo before you run; anything that slips past the type checker raises at construction.
+* A method you don't mention keeps the defaults. The map is a set of overrides, not a manifest.
+* `CacheHint(ttl_ms=5_000)` left `scope` unset, so it stays `"private"`: five seconds of freshness, per caller. Scope and TTL are independent decisions.
+* `"server/discover"` is a legal key too, since the discovery result is cacheable like any list.
+
+!!! warning
+    `cacheScope: "public"` means *anyone* may be served your cached response. A shared
+    gateway will happily hand one user's result to another, even when the request was
+    authenticated. Mark a result `"public"` only when it is identical for every caller, and
+    never use `cacheScope` as access control: it is a label, not a lock.
+
+## Per-handler override
+
+On the low-level `Server`, handlers build their results by hand, and `ttl_ms` / `cache_scope` are just fields on the result models. A handler that sets them explicitly always wins over the constructor map, field by field:
+
+```python title="server.py" hl_lines="11 17"
+# docs_src/caching/tutorial002.py
+from typing import Any
+
+from mcp.server import CacheHint, Server, ServerRequestContext
+from mcp.types import ListToolsResult, PaginatedRequestParams, Tool
+
+TOOLS = [Tool(name="forecast", input_schema={"type": "object"})]
+
+
+async def list_tools(ctx: ServerRequestContext[Any], params: PaginatedRequestParams | None) -> ListToolsResult:
+    print("tools/list served")
+    return ListToolsResult(tools=TOOLS, ttl_ms=1_000)
+
+
+server = Server(
+    "Weather",
+    on_list_tools=list_tools,
+    cache_hints={"tools/list": CacheHint(ttl_ms=60_000, scope="public")},
+)
+app = server.streamable_http_app()
+```
+
+The handler said `ttl_ms=1_000` and nothing about scope. On the wire: `ttlMs: 1000` (the handler's, not the map's `60_000`) and `cacheScope: "public"` (the map's, because the handler left it unset). Explicit beats configured, and configured beats default. This holds per field, so a handler can pin one field and leave the other to the server-wide policy.
+
+This is also the escape hatch for dynamics the constructor can't know: a handler that filters `resources/read` per user can return `cache_scope="private"` for one URI from an otherwise-public server.
+
+One caveat on paginated lists: the protocol requires the **same `cacheScope` on every page** of one list. The constructor map satisfies that by construction, since it's keyed by method, not by page. But a handler that overrides the scope itself owns that consistency: override it on *every* page, never only when a cursor is present, or page one and page two will disagree.
+
+## What the client sees
+
+On a 2026-07-28 session, `Client` honors the hints for you: it has a built-in response cache, on by default. A result that arrives carrying a `ttlMs` is stored, and an identical call within that TTL is served from the cache with no round trip. A result that carries *no* hint is not cached: hint-less results get `CacheConfig.default_ttl_ms`, which defaults to `0` (immediately stale), so a server that declares nothing sees exactly the call-for-call traffic it always did.
+
+To watch that happen, serve the `server.py` from the previous section with uvicorn (its last line builds the ASGI app). The handler prints a line every time it actually runs:
+
+```console
+uvicorn server:app --port 8000
+```
+
+```python title="client.py" hl_lines="20 23 28"
+# docs_src/caching/tutorial003.py
+from dataclasses import dataclass
+
+import anyio
+
+from mcp import Client
+from mcp.client import CacheConfig
+from mcp.types import ListToolsResult
+
+
+@dataclass
+class Clock:
+    now: float = 0.0
+
+
+clock = Clock()  # advanced by hand below, so the TTL runs out without sleeping
+
+
+async def run(client: Client) -> ListToolsResult:
+    tools = await client.list_tools()  # fetch 1
+    await client.list_tools()  # still fresh: served from the cache
+    clock.now += 2
+    await client.list_tools()  # past the one-second TTL: fetch 2
+    await client.list_tools(cache_mode="refresh")  # skip the cache read: fetch 3
+    return tools
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp", cache=CacheConfig(clock=lambda: clock.now)) as client:
+        tools = await run(client)
+        print(tools.ttl_ms, tools.cache_scope)
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+Run `python client.py` from a second terminal. It prints the hints the first result carried, the handler's `ttlMs` next to the map's `cacheScope`:
+
+```text
+1000 public
+```
+
+The server's terminal tells the rest of the story: between uvicorn's request logs, `tools/list served` appears three times.
+
+Four calls, three fetches. The second call found a fresh entry and never reached the server; advancing the (injected) clock past the TTL made the third fetch again; the fourth said `cache_mode="refresh"`. That kwarg exists on the five caching verbs (`list_tools`, `list_prompts`, `list_resources`, `list_resource_templates`, `read_resource`):
+
+* `"use"` (the default) serves a fresh entry if there is one, and stores the fetch if not.
+* `"refresh"` never serves: it fetches and stores the result, replacing whatever was cached.
+* `"bypass"` makes the round trip without touching the cache at all: no read, no write.
+
+One rule sits above `"use"`: **calls carrying `meta` always reach the server.** A request with `meta` set (a progress token, tracing fields) expects a wire request, so under `cache_mode="use"` it is treated as `"refresh"`: the cache read is skipped, and the fetched result still replaces the cached entry. `"bypass"` and an explicit `"refresh"` behave as they always do.
+
+To turn caching off entirely, pass `cache=None` when constructing the `Client`: every call is a round trip again, and `cache_mode`, while still accepted, does nothing.
+
+Scope is honored automatically too: `"private"` entries are keyed to the cache's *partition* (below), while `"public"` ones may opt into wider sharing. And **notifications beat TTL** for the exact entries they name: a `list_changed` notification evicts the matching cached listing, and `resources/updated` evicts the cached read stored under exactly its URI, however fresh they were. On a 2026-07-28 connection those notifications arrive on a `subscriptions/listen` stream you open with `client.listen(...)`, and eviction completes before your watcher sees the event; **[Subscriptions](https://py.sdk.modelcontextprotocol.io/client/subscriptions/index.md)** is that page.
+
+One caveat on `resources/updated`: eviction is exact-URI only. The store contract has no enumerate or scan operation (same as the reference TypeScript implementation), so a notification carrying a *sub*-resource URI does not evict a cached read of its parent. If your server signals sub-resources this way, refetch the parent with `cache_mode="refresh"`.
+
+### Configuring it: `CacheConfig`
+
+```python
+from mcp.client import CacheConfig
+
+client = Client("https://api.example.com/mcp", cache=CacheConfig(default_ttl_ms=5_000))
+```
+
+* `store`: where entries live. The default is a fresh in-memory store per client; pass your own `ResponseCacheStore` implementation (Redis-backed, say) to share a cache across clients or processes. The contract types (`ResponseCacheStore`, `CacheKey`, `CacheEntry`, and the default `InMemoryResponseCacheStore`) are importable from `mcp.client`. A lookup may issue up to two sequential store `get`s (the private arm, then the public one), so size a remote store's latency expectations accordingly. A custom store **requires** an explicit `partition`.
+* `partition`: the authorization-context label that keeps one principal's `"private"` entries from being served to another within a shared store.
+* `target_id`: explicit server identity, for custom transports and in-process servers (below).
+* `default_ttl_ms`: TTL applied to results that carry no `ttlMs` hint. The default `0` leaves hint-less results uncached.
+* `share_public`: serve server-asserted-`"public"` entries across partitions (below). Off by default.
+* `clock`: the wall-clock source, in epoch seconds. Inject one, as the example above does, and expiry tests need no sleeping.
+
+!!! warning "Partition = verified principal"
+    Derive `partition` from a **verified credential**, such as a validated token's subject. Never derive it from request-supplied data, and never from the server URL (server identity is a separate key axis). The SDK is a library with no authentication of its own: the trust anchor is whoever constructs the `CacheConfig`, which is the deployment, not the tenant. A multi-tenant gateway mints one `CacheConfig` per authenticated principal.
+
+    The partition is also fixed for the `Client`'s lifetime. If the connection's authorization context changes mid-session (a re-authentication as a different principal, say), the cache does not follow; construct a new `Client` for the new principal.
+
+Cache keys also carry the **server's identity**: the URL string you dialed, with any `user:pass@` userinfo stripped and otherwise byte-exact. No case folding, no query reordering, no trailing-slash cleanup. Under-normalizing only costs sharing, while over-normalizing could merge two tenants (`?tenant=a` vs `?tenant=b`), so superficially different URLs simply don't share entries. When there is no URL (an in-process server, or a `Transport` instance), the client gets a random per-instance identity instead; set `CacheConfig.target_id` to name the server (with a custom store this is required, and construction says so). The identity is sha256-hashed before it enters key material, so a URL carrying secrets in its query string never appears in store keys. Don't log the pre-hash form yourself, either.
+
+!!! warning "`share_public` trusts the server, fleet-wide"
+    By default even `"public"` entries stay within their partition. `share_public=True` serves entries the server marked `cacheScope: "public"` to **every** partition using the store, trusting the server's classification on behalf of all of them. A server that stamps `"public"` on per-tenant data (by bug or by malice) then leaks one tenant's response to the others. The flag is deliberately constructor-level only: the per-call `cache_mode` can narrow caching, but nothing per-call can widen sharing.
+
+### What the cache never does
+
+* **Session-tier calls bypass it.** `client.session.list_tools()` and friends always make the round trip; the cache lives on the `Client` verbs.
+* **`server/discover` stays out of it.** The discover result is delivered once, at connect, and never enters the response cache, even when it carries a `ttlMs`. If you persist one yourself to skip the reconnect probe ([`prior_discover`](https://py.sdk.modelcontextprotocol.io/protocol-versions/index.md#reconnecting-with-prior_discover)), its freshness is your bookkeeping: `DiscoverResult` carries `ttl_ms` and `cache_scope`, already parsed, for exactly that purpose.
+* **Continuation pages are never cached.** Only cursor-less calls participate. A continuation page rejected for an expired cursor does *evict* the cached listing, because the listing changed under it.
+* **Multi-round-trip reads are never cached.** A `read_resource` seeded with `input_responses`/`request_state`, or one that resolves through input rounds, never enters the cache (a spec MUST).
+* **Notification eviction needs notifications.** Eviction is only as good as the transport's delivery, and the modern in-process path (`Client(server)` with the default `mode="auto"`) does not deliver standalone notifications today.
+* **Eviction is eventual, not instantaneous.** Wire-path notifications are dispatched from spawned tasks, so a call racing a notification's arrival may be served the pre-eviction entry once more; the window is bounded by dispatch latency, and the eviction still lands.
+* **No stale-if-error.** An expired entry is never served because the refetch failed; the error propagates.
+* **No early re-fetch.** A stored entry is served until its TTL expires and the next call after that pays the round trip; nothing refreshes in the background.
+* **No coalescing.** Two concurrent identical calls are two fetches.
+* **No TTL beyond 24 hours.** A larger `ttlMs`, whether server-sent or configured, is clamped down on store (`mcp.client.caching.MAX_TTL_MS`), bounding how long any entry, however generously hinted, can be served.
+* On a **shared store**, clients race each other. Each client drops its own write when an eviction overtook the fetch in flight, but a *co-tenant* client can still write back an entry that an eviction it never saw had removed; and that race bookkeeping is itself bounded: past 4096 tracked keys the oldest key's guard is dropped first. Both windows are accepted, and closed by the TTL cap above.
+* **No serving across protocol eras.** Entries are scoped to the negotiated protocol version: on a shared persistent store, a session never serves an entry written under a different negotiated version (the same listing genuinely differs by era, since the SDK strips the 2026 fields for older sessions). Eviction likewise touches only the current era's entries; another era's entries simply age out by TTL.
+
+### Reading the hints yourself
+
+The hints are also plain fields on every cacheable result (`result.ttl_ms` and `result.cache_scope`, already parsed), in case you want to layer your own bookkeeping on top of (or instead of) the built-in cache.
+
+Against an **older server** (pre-2026 protocol), the fields are simply absent from the wire, and the models show their conservative defaults: `ttl_ms == 0` and `cache_scope == "private"`, stale and unshared, the right assumption for a server that declared nothing. The cache treats a legacy session the same way: hints are never consulted there (whatever keys appear on the wire), only `default_ttl_ms` applies, and its default of `0` caches nothing, so a pre-2026 connection behaves exactly as it did before the cache existed. If you need to distinguish "the server said 0" from "the server said nothing", check `"ttl_ms" in result.model_fields_set`: it's only set when the field actually arrived.
+
+## Older clients
+
+Clients on pre-2026 protocol versions never see either field; the SDK strips them at serialization for those connections. Configure your hints once; there is nothing version-specific to write.
+
+## Recap
+
+* Six methods carry `ttlMs`/`cacheScope`; the SDK defaults them to `0`/`"private"`, stale and unshared, always safe.
+* `cache_hints={method: CacheHint(...)}` at construction (both `MCPServer` and `Server`) sets server-wide values per method.
+* A handler that sets the fields on its result overrides the map, per field.
+* `"public"` is a promise that the result is identical for every caller. It is not access control.
+* `Client` honors the hints automatically: its response cache is on by default, serves fresh entries instead of refetching, and caches nothing for servers (or sessions) that provide no hints.
+* Per call, `cache_mode="refresh"` refetches and `"bypass"` skips the cache; `cache=None` at construction turns it off entirely.
+
+# Advanced
+
+Source: https://py.sdk.modelcontextprotocol.io/advanced/
+
+Everything an ordinary server or client needs has a topical home in the sections above.
+This section is the escape hatches you reach for when `MCPServer`'s convenience
+layer is in the way:
+
+* **[The low-level Server](https://py.sdk.modelcontextprotocol.io/advanced/low-level-server/index.md)**: the class `MCPServer` is built on.
+  Hand-written schemas, `on_*` handlers, nothing checked for you, and custom JSON-RPC
+  methods of your own.
+* **[Pagination](https://py.sdk.modelcontextprotocol.io/advanced/pagination/index.md)** and **[Middleware](https://py.sdk.modelcontextprotocol.io/advanced/middleware/index.md)**: two things you
+  can *only* do on the low-level `Server`.
+* **[Extensions](https://py.sdk.modelcontextprotocol.io/advanced/extensions/index.md)** and **[MCP Apps](https://py.sdk.modelcontextprotocol.io/advanced/apps/index.md)**: the protocol's
+  extension surface. Compose extension packages into a server, or write your own.
+
+A few things you might reasonably look for here live where you'd actually use them
+instead:
+
+* **Authorization** is under **[Running your server](https://py.sdk.modelcontextprotocol.io/run/index.md)** because you
+  protect a server where you deploy it.
+* **OAuth**, **identity assertion**, connecting to **multiple servers**, and the
+  response **cache** are all under **[Clients](https://py.sdk.modelcontextprotocol.io/client/index.md)**.
+* **Multi-round-trip requests** and **Subscriptions** are under
+  **[Inside your handler](https://py.sdk.modelcontextprotocol.io/handlers/index.md)** because both are things a
+  handler *does*.
+* **URI templates** is under **[Servers](https://py.sdk.modelcontextprotocol.io/servers/index.md)**, next to Resources.
+* **[Protocol versions](https://py.sdk.modelcontextprotocol.io/protocol-versions/index.md)** and
+  **[Deprecated features](https://py.sdk.modelcontextprotocol.io/deprecated/index.md)** each have their own top-level page.
+
+If you're not sure whether you need this section, you don't.
+
+# The low-level Server
+
+Source: https://py.sdk.modelcontextprotocol.io/advanced/low-level-server/
+
+`@mcp.tool()` is a layer. Underneath it is a second server class, `Server`, that speaks raw MCP: you hand it the protocol objects and it puts them on the wire, unchanged.
+
+`MCPServer` is built on top of it. You drop down when the convenience layer is in the way:
+
+* You need to emit an **exact** schema (loaded from a file, generated from a database), not one derived from a Python signature.
+* You need full control of the result: `_meta`, `is_error`, every key of `structured_content`.
+* You need to handle a method MCP doesn't define.
+
+For everything else, stay on `MCPServer`.
+
+## The same tool, by hand
+
+This is the `search_books` tool that **[Tools](https://py.sdk.modelcontextprotocol.io/servers/tools/index.md)** writes in nine lines of `@mcp.tool()`, with the sugar removed:
+
+```python title="server.py" hl_lines="22 26 32"
+# docs_src/lowlevel/tutorial001.py
+from mcp.server import Server, ServerRequestContext
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    TextContent,
+    Tool,
+)
+
+SEARCH_BOOKS = Tool(
+    name="search_books",
+    description="Search the catalog by title or author.",
+    input_schema={
+        "type": "object",
+        "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+        "required": ["query", "limit"],
+    },
+)
+
+
+async def list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams | None) -> ListToolsResult:
+    return ListToolsResult(tools=[SEARCH_BOOKS])
+
+
+async def call_tool(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    args = params.arguments or {}
+    text = f"Found 3 books matching {args['query']!r} (showing up to {args['limit']})."
+    return CallToolResult(content=[TextContent(type="text", text=text)])
+
+
+server = Server("Bookshop", on_list_tools=list_tools, on_call_tool=call_tool)
+app = server.streamable_http_app()
+```
+
+Three things changed, and they are the whole low-level API:
+
+* **Handlers are constructor parameters.** `on_list_tools=` and `on_call_tool=` go into `Server(...)`. There are no decorators down here, and every handler has the same shape: `async (ctx, params) -> result`.
+* **You write the input schema.** `Tool.input_schema` is a plain JSON Schema `dict`. Nobody derives it from type hints, because there are no type hints to derive it from.
+* **You build the result.** `CallToolResult(content=[TextContent(...)])`, by hand. Nothing is wrapped, converted, or inferred from a return annotation.
+
+`params` is the parsed request: `CallToolRequestParams` gives you `.name` and `.arguments`. `ctx` is a `ServerRequestContext`: `ctx.session` for talking back to the client, `ctx.lifespan_context`, `ctx.request_id`, and `ctx.meta`, the request's inbound `_meta`.
+
+!!! info
+    If you've used FastAPI, you already know this relationship. `MCPServer` is the decorators-and-type-hints layer; `Server` is the Starlette underneath. They are not rivals: `MCPServer` constructs a `Server` and registers handlers exactly like these on it.
+
+### Try it
+
+`mcp dev` and `mcp run` only accept an `MCPServer`, so you serve this one yourself. The last line of `server.py` builds an ordinary ASGI app from it, and uvicorn runs that:
+
+```console
+uvicorn server:app --port 8000
+```
+
+Point the Inspector, or any client, at `http://localhost:8000/mcp`:
+
+```python title="client.py"
+import asyncio
+
+from mcp import Client
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        result = await client.call_tool("search_books", {"query": "dune", "limit": 5})
+        print(result.content)
+
+
+asyncio.run(main())
+```
+
+```text
+[TextContent(type='text', text="Found 3 books matching 'dune' (showing up to 5).", annotations=None, meta=None)]
+```
+
+The same text the `@mcp.tool()` version produced. Two honest differences:
+
+* `result.structured_content` is `None`. The high-level server wraps a `-> str` into `{"result": ...}` for you; here nobody builds what you didn't build.
+* `list_tools` returns the schema **you** typed, character for character. The high-level version had `"title": "Query"` on every property and a `"title": "search_booksArguments"` at the root: Pydantic artifacts. Down here, if it's on the wire, you put it there.
+
+In a test you skip uvicorn and the port: `Client(server)` takes a low-level `Server` in-process exactly like it takes an `MCPServer`, and **[Testing](https://py.sdk.modelcontextprotocol.io/get-started/testing/index.md)** is that pattern.
+
+## Nothing is checked for you
+
+`MCPServer` rejects a bad argument before your function ever runs, validating the call against the schema it generated (**[Tools](https://py.sdk.modelcontextprotocol.io/servers/tools/index.md)**).
+
+`Server` does not do that. Your `input_schema` is *advertised* to the client; it is never *applied* to `params.arguments`.
+
+!!! check
+    Call `search_books` without `limit` and your `args["limit"]` raises `KeyError`. The client sees:
+
+    ```text
+    MCPError: Internal server error
+    ```
+
+    A JSON-RPC error, code `-32603`, with a deliberately generic message: the SDK won't leak your traceback to a remote caller. The model never finds out what it did wrong, so it can't retry. (In a test, `raise_exceptions=True` surfaces the real exception instead; see **[Testing](https://py.sdk.modelcontextprotocol.io/get-started/testing/index.md)**.)
+
+That generalises. An exception raised from a low-level handler is **always** a protocol error, never an `is_error=True` tool result. If you want the model to read the failure and recover, validate `params.arguments` yourself and return `CallToolResult(content=[TextContent(...)], is_error=True)`. The two kinds of failure are the subject of **[Handling errors](https://py.sdk.modelcontextprotocol.io/servers/handling-errors/index.md)**.
+
+## Two tools, one handler
+
+`on_call_tool` is the single entry point for every tool on the server. You route on `params.name`:
+
+```python title="server.py" hl_lines="38-43"
+# docs_src/lowlevel/tutorial002.py
+from mcp.server import Server, ServerRequestContext
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    TextContent,
+    Tool,
+)
+
+SEARCH_BOOKS = Tool(
+    name="search_books",
+    description="Search the catalog by title or author.",
+    input_schema={
+        "type": "object",
+        "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+        "required": ["query", "limit"],
+    },
+)
+
+ADD_BOOK = Tool(
+    name="add_book",
+    description="Add a book to the catalog.",
+    input_schema={
+        "type": "object",
+        "properties": {"title": {"type": "string"}, "author": {"type": "string"}, "year": {"type": "integer"}},
+        "required": ["title", "author", "year"],
+    },
+)
+
+
+async def list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams | None) -> ListToolsResult:
+    return ListToolsResult(tools=[SEARCH_BOOKS, ADD_BOOK])
+
+
+async def call_tool(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    args = params.arguments or {}
+    if params.name == "search_books":
+        text = f"Found 3 books matching {args['query']!r} (showing up to {args['limit']})."
+    elif params.name == "add_book":
+        text = f"Added {args['title']!r} by {args['author']} ({args['year']})."
+    else:
+        raise ValueError(f"Unknown tool: {params.name}")
+    return CallToolResult(content=[TextContent(type="text", text=text)])
+
+
+server = Server("Bookshop", on_list_tools=list_tools, on_call_tool=call_tool)
+```
+
+* `list_tools` advertises both. `call_tool` dispatches on the name.
+* The `else` branch matters: `Server` will happily forward a `tools/call` for a name you never listed straight into your handler. Raising there turns the call into the same `-32603` as above.
+
+## Structured output, by hand
+
+Declare `output_schema` on the `Tool` and put `structured_content` on the result. Both are yours:
+
+```python title="server.py" hl_lines="19-23 36"
+# docs_src/lowlevel/tutorial003.py
+from mcp.server import Server, ServerRequestContext
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    TextContent,
+    Tool,
+)
+
+SEARCH_BOOKS = Tool(
+    name="search_books",
+    description="Search the catalog by title or author.",
+    input_schema={
+        "type": "object",
+        "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+        "required": ["query", "limit"],
+    },
+    output_schema={
+        "type": "object",
+        "properties": {"matches": {"type": "integer"}, "query": {"type": "string"}},
+        "required": ["matches", "query"],
+    },
+)
+
+
+async def list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams | None) -> ListToolsResult:
+    return ListToolsResult(tools=[SEARCH_BOOKS])
+
+
+async def call_tool(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    args = params.arguments or {}
+    data = {"matches": 3, "query": args["query"]}
+    return CallToolResult(
+        content=[TextContent(type="text", text=f"Found 3 books matching {args['query']!r}.")],
+        structured_content=data,
+    )
+
+
+server = Server("Bookshop", version="2.0.0", on_list_tools=list_tools, on_call_tool=call_tool)
+```
+
+Call it and the result carries both representations:
+
+```json
+{
+  "content": [{"type": "text", "text": "Found 3 books matching 'dune'."}],
+  "structuredContent": {"matches": 3, "query": "dune"},
+  "isError": false,
+  "resultType": "complete",
+  "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "Bookshop", "version": "2.0.0"}}
+}
+```
+
+The `_meta` block is the server's identity stamp: the SDK adds it to every 2026-era result, with the `version` from the constructor (a server that sets none reports an empty string). A server that must not identify itself can strip the key with a middleware, which owns the results it returns.
+
+The server never compares the two fields. This SDK's `Client` does: return `structured_content` that doesn't satisfy the `output_schema` you declared and `call_tool` raises a `RuntimeError` that starts with `Invalid structured content returned by tool search_books` and goes on to quote the `jsonschema` failure. Promising a schema is cheap; keeping it is on you. The whole ladder of return types and schemas is in **[Structured Output](https://py.sdk.modelcontextprotocol.io/servers/structured-output/index.md)**.
+
+## The dialect is JSON Schema 2020-12
+
+`input_schema` and `output_schema` are JSON Schema, and the [MCP specification](https://modelcontextprotocol.io/specification/latest/basic#json-schema-usage) fixes the dialect: a schema with no `$schema` key is **JSON Schema 2020-12**. The schemas `MCPServer` generates rely on that default (Pydantic writes 2020-12 and omits the key), and a hand-written dict is held to it too, so the full 2020-12 vocabulary is available:
+
+```python title="server.py" hl_lines="8 14-15"
+# docs_src/lowlevel/tutorial007.py
+from mcp.server import Server, ServerRequestContext
+from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult, PaginatedRequestParams, TextContent, Tool
+
+FIND_BOOK = Tool(
+    name="find_book",
+    description="Find one book by ISBN, or by title and author.",
+    input_schema={
+        "type": "object",
+        "properties": {
+            "isbn": {"type": "string", "pattern": "^[0-9]{13}$"},
+            "title": {"type": "string"},
+            "author": {"type": "string"},
+        },
+        "oneOf": [{"required": ["isbn"]}, {"required": ["title", "author"]}],
+        "additionalProperties": False,
+    },
+)
+
+
+async def list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams | None) -> ListToolsResult:
+    return ListToolsResult(tools=[FIND_BOOK])
+
+
+async def call_tool(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    args = params.arguments or {}
+    found = f"ISBN {args['isbn']}" if "isbn" in args else f"{args['title']!r} by {args['author']}"
+    return CallToolResult(content=[TextContent(type="text", text=f"Found {found} on shelf C-3.")])
+
+
+server = Server("Bookshop", on_list_tools=list_tools, on_call_tool=call_tool)
+```
+
+* The root of `input_schema` must be `"type": "object"`. Beside it, `oneOf`, `additionalProperties`, `anyOf`, `if`/`then`/`else`, `prefixItems`, `$defs` with local `$ref`s and the rest of the 2020-12 keywords reach the client exactly as written.
+* No `$schema` key is needed. Add one only to opt into an older draft: this SDK's `Client`, which validates `structured_content` against a tool's `output_schema`, picks its validator from `$schema` and uses 2020-12 when there is none.
+
+## `_meta`: for the application, not the model
+
+`content` is the part of the answer the model reads. `structured_content` is the same answer as typed data. `_meta` is the third channel: data that rides along with the result for the **client application**, without being part of the answer at all.
+
+Use it for record IDs, trace IDs, anything your UI needs and your prompt doesn't:
+
+```python title="server.py" hl_lines="37"
+# docs_src/lowlevel/tutorial004.py
+from mcp.server import Server, ServerRequestContext
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    TextContent,
+    Tool,
+)
+
+SEARCH_BOOKS = Tool(
+    name="search_books",
+    description="Search the catalog by title or author.",
+    input_schema={
+        "type": "object",
+        "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+        "required": ["query", "limit"],
+    },
+    output_schema={
+        "type": "object",
+        "properties": {"matches": {"type": "integer"}, "query": {"type": "string"}},
+        "required": ["matches", "query"],
+    },
+)
+
+
+async def list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams | None) -> ListToolsResult:
+    return ListToolsResult(tools=[SEARCH_BOOKS])
+
+
+async def call_tool(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    args = params.arguments or {}
+    data = {"matches": 3, "query": args["query"]}
+    return CallToolResult(
+        content=[TextContent(type="text", text=f"Found 3 books matching {args['query']!r}.")],
+        structured_content=data,
+        _meta={"bookshop/record_ids": ["bk_17", "bk_42", "bk_99"]},
+    )
+
+
+server = Server("Bookshop", on_list_tools=list_tools, on_call_tool=call_tool)
+```
+
+* You construct it as `_meta=`, the wire name. The client reads it back as `result.meta`.
+* Namespace your keys (`bookshop/record_ids`). The `io.modelcontextprotocol/*` keys are reserved by the protocol.
+
+!!! warning
+    `_meta` is a convention between you and the client application, not a guarantee about what reaches
+    the model. The host decides what it renders. Never put a secret in any part of a tool result.
+
+## Capabilities follow your handlers
+
+A `Server` advertises exactly the method families you gave it handlers for. The `Bookshop` above passes `on_list_tools` and `on_call_tool` and nothing else, so a client connecting to it sees:
+
+```json
+{"tools": {"listChanged": false}}
+```
+
+No `resources`, no `prompts`: there is nothing to back them. Pass `on_list_prompts` and `prompts` appears; pass `on_completion` and `completions` appears.
+
+`MCPServer` always advertises tools, resources and prompts, whether you registered any or not, because its managers always exist. Down here the declaration *is* the constructor call.
+
+## The lifespan generic
+
+`Server` is generic in the type its lifespan yields. Annotate it once and the object is typed everywhere it surfaces:
+
+```python title="server.py" hl_lines="24-26 44-45 50"
+# docs_src/lowlevel/tutorial005.py
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+
+from mcp.server import Server, ServerRequestContext
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    TextContent,
+    Tool,
+)
+
+
+@dataclass
+class Catalog:
+    books: list[str]
+
+    def search(self, query: str) -> list[str]:
+        return [title for title in self.books if query.lower() in title.lower()]
+
+
+@asynccontextmanager
+async def lifespan(server: Server[Catalog]) -> AsyncIterator[Catalog]:
+    yield Catalog(books=["Dune", "Dune Messiah", "Children of Dune"])
+
+
+SEARCH_BOOKS = Tool(
+    name="search_books",
+    description="Search the catalog by title or author.",
+    input_schema={
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    },
+)
+
+
+async def list_tools(ctx: ServerRequestContext[Catalog], params: PaginatedRequestParams | None) -> ListToolsResult:
+    return ListToolsResult(tools=[SEARCH_BOOKS])
+
+
+async def call_tool(ctx: ServerRequestContext[Catalog], params: CallToolRequestParams) -> CallToolResult:
+    matches = ctx.lifespan_context.search((params.arguments or {})["query"])
+    text = f"Found {len(matches)} books: {', '.join(matches)}."
+    return CallToolResult(content=[TextContent(type="text", text=text)])
+
+
+server = Server("Bookshop", lifespan=lifespan, on_list_tools=list_tools, on_call_tool=call_tool)
+```
+
+* The lifespan is a `Callable[[Server[Catalog]], AbstractAsyncContextManager[Catalog]]`; `@asynccontextmanager` on an `async` generator gives you exactly that.
+* Whatever it `yield`s becomes `ctx.lifespan_context`, and because the handlers are annotated `ServerRequestContext[Catalog]`, `.search(...)` autocompletes and type-checks.
+* It is entered once when the server starts and exited once when it stops. Startup, teardown, and `MCPServer`'s version of the same idea are in **[Lifespan](https://py.sdk.modelcontextprotocol.io/handlers/lifespan/index.md)**.
+
+Without a `lifespan=`, `ctx.lifespan_context` is an empty `dict`.
+
+## A method of your own
+
+The constructor covers the methods MCP defines. `add_request_handler` covers everything else:
+
+```python title="server.py" hl_lines="35-36 39-40 43-44 48"
+# docs_src/lowlevel/tutorial006.py
+from pydantic import BaseModel
+
+from mcp.server import Server, ServerRequestContext
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    RequestParams,
+    TextContent,
+    Tool,
+)
+
+SEARCH_BOOKS = Tool(
+    name="search_books",
+    description="Search the catalog by title or author.",
+    input_schema={
+        "type": "object",
+        "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}},
+        "required": ["query", "limit"],
+    },
+)
+
+
+async def list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams | None) -> ListToolsResult:
+    return ListToolsResult(tools=[SEARCH_BOOKS])
+
+
+async def call_tool(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    args = params.arguments or {}
+    text = f"Found 3 books matching {args['query']!r} (showing up to {args['limit']})."
+    return CallToolResult(content=[TextContent(type="text", text=text)])
+
+
+class ReindexParams(RequestParams):
+    full: bool = False
+
+
+class ReindexResult(BaseModel):
+    indexed: int
+
+
+async def reindex(ctx: ServerRequestContext, params: ReindexParams) -> ReindexResult:
+    return ReindexResult(indexed=3)
+
+
+server = Server("Bookshop", on_list_tools=list_tools, on_call_tool=call_tool)
+server.add_request_handler("bookshop/reindex", ReindexParams, reindex)
+```
+
+* The first argument is the method string. Notifications have a twin, `add_notification_handler`. Its handlers fire on stdio and on handshake-era HTTP connections; on the `2026-07-28` streamable-HTTP path a client's notification POST is acknowledged `202` and not dispatched, because that revision defines no client-to-server notifications over HTTP.
+* `params_type` is the model the incoming `params` are validated against **before** your handler runs, so custom methods *do* get the validation tools don't. Subclass `RequestParams` so the `_meta` field parses like every other method's.
+* The handler returns a `BaseModel`, a `dict`, or `None`. The SDK serialises it into the JSON-RPC result.
+
+One honest caveat: the high-level `Client` only has verbs for the methods MCP defines, so there is no `client.reindex()`. A vendor method is for a peer that already knows it exists: a client you also ship, or another service of yours speaking JSON-RPC.
+
+One method you cannot claim:
+
+```text
+ValueError: 'initialize' is handled by the server runner and cannot be overridden;
+use Server.middleware to observe or wrap initialization
+```
+
+The handshake belongs to the runner. `server/discover`, `ping`, and every other built-in are yours to replace.
+
+!!! tip
+    `Server.middleware`, mentioned in that error, wraps **every** inbound message, including `initialize`. If what you want is to observe or rewrite traffic rather than answer a new method, start at **[Middleware](https://py.sdk.modelcontextprotocol.io/advanced/middleware/index.md)**.
+
+## The other handlers
+
+Each of these is one idea you now have the vocabulary for; each has its own page.
+
+* `on_call_tool`, `on_get_prompt`, and `on_read_resource` may return an `InputRequiredResult` instead of their normal result to pause the call and ask the client for input; see **[Multi-round-trip requests](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md)**. True to this tier, nothing is installed for you: where `MCPServer` seals `requestState` by default, here the `request_state` you set crosses the wire exactly as written until you opt in with `server.middleware.append(RequestStateBoundary(RequestStateSecurity(keys=[...]), default_audience=server.name))`: one line (both names import from `mcp.server.request_state`) for the identical sealing and verification `MCPServer` performs (**[Protecting `requestState`](https://py.sdk.modelcontextprotocol.io/handlers/multi-round-trip/index.md#protecting-requeststate)**).
+* `on_list_resources`, `on_read_resource`, `on_list_prompts`, `on_get_prompt`, `on_completion` are the same `(ctx, params) -> result` shape for the other primitives.
+* `on_subscriptions_listen` serves the 2026-07-28 `subscriptions/listen` stream. Pass a `ListenHandler` built over a `SubscriptionBus` and publish events to the bus from your other handlers; see **[Subscriptions](https://py.sdk.modelcontextprotocol.io/handlers/subscriptions/index.md)** for the full composition.
+* `server.streamable_http_app()` returns the same Starlette app `MCPServer`'s does; deploy it the way **[Running your server](https://py.sdk.modelcontextprotocol.io/run/index.md)** deploys any other ASGI app. There is no `server.run(transport=...)` down here: `server.run(read_stream, write_stream, server.create_initialization_options())` drives one connection over a pair of streams, and that one line is the whole story.
+
+## Recap
+
+* The low-level `Server` takes its handlers as `on_*` **constructor parameters**; every handler is `async (ctx, params) -> result`.
+* You write the `input_schema` dict and you build the `CallToolResult`. Nothing is derived, wrapped, or validated for you.
+* An exception in a handler is a `-32603` protocol error. A tool error the model can read is a `CallToolResult` with `is_error=True` that **you** return.
+* `_meta` on the result is addressed to the client application, not the model.
+* `Server[T]` is generic in what its lifespan yields; `ctx.lifespan_context` is a typed `T`.
+* `add_request_handler(method, params_type, handler)` serves any method. `initialize` is reserved.
+* The capabilities a `Server` advertises are derived from which handlers you registered.
+
+The client treated both servers identically because they *are* the same protocol, which is the whole point. The next layer down isn't a class at all: it's **[Middleware](https://py.sdk.modelcontextprotocol.io/advanced/middleware/index.md)**.
+
+# Pagination
+
+Source: https://py.sdk.modelcontextprotocol.io/advanced/pagination/
+
+Most servers never need this.
+
+`MCPServer` answers every `list_*` request with everything it has, in one page, `next_cursor=None`. For a few dozen tools, resources or prompts that is the right answer and there is nothing to configure.
+
+Pagination is for the server whose resource list is really a database: thousands of rows it refuses to serialize in one response. The protocol's answer is a **cursor**: the server returns a page plus an opaque token, and the client sends that token back to get the next page.
+
+`@mcp.resource()` has no hook for any of that. To page, you write the list handler yourself, on the **[low-level Server](https://py.sdk.modelcontextprotocol.io/advanced/low-level-server/index.md)**.
+
+## A server that pages
+
+```python title="server.py" hl_lines="12 15-16"
+# docs_src/pagination/tutorial001.py
+from typing import Any
+
+from mcp.server import Server, ServerRequestContext
+from mcp.types import ListResourcesResult, PaginatedRequestParams, Resource
+
+BOOKS = [f"book-{n}" for n in range(1, 101)]
+
+PAGE_SIZE = 10
+
+
+async def list_books(ctx: ServerRequestContext[Any], params: PaginatedRequestParams | None) -> ListResourcesResult:
+    start = 0 if params is None or params.cursor is None else int(params.cursor)
+    end = start + PAGE_SIZE
+    page = [Resource(uri=f"books://catalog/{name}", name=name) for name in BOOKS[start:end]]
+    next_cursor = str(end) if end < len(BOOKS) else None
+    return ListResourcesResult(resources=page, next_cursor=next_cursor)
+
+
+server = Server("Bookshop", on_list_resources=list_books)
+app = server.streamable_http_app()
+```
+
+* On a low-level `Server`, handlers are constructor arguments, not decorators. `on_list_resources` answers every `resources/list` request; that's the whole hookup.
+* Every paged handler is typed `params: PaginatedRequestParams | None`, and the example accepts both. Over a connection, though, the SDK never hands you `None` (a request with no `params` member reaches the handler as the model with its defaults), so the signal that matters is `params.cursor is None`: **start from the top**.
+* You decide what a cursor *is*. Here it's an offset rendered as a string. A timestamp, a primary key, a base64 blob: anything you can mint on the way out and recognise on the way back in.
+* `next_cursor=None` is how you say "that was the last page". There is no count, no total, no `has_more`. `None` is the entire signal.
+
+!!! tip
+    A `PAGE_SIZE` of 10 makes the example readable. Pick yours per endpoint: a list of
+    one-line resources can afford a page of 500; a list of fat prompt templates cannot.
+    The client has no say in it, and that is by design.
+
+### Try it
+
+`mcp run` only accepts an `MCPServer`, so you serve this one yourself. The last line of `server.py` builds an ordinary ASGI app from the `Server`, and uvicorn runs that:
+
+```console
+uvicorn server:app --port 8000
+```
+
+Point any client (**[The Client](https://py.sdk.modelcontextprotocol.io/client/index.md)**, or the Inspector) at `http://localhost:8000/mcp` and call `list_resources()` with no arguments. You get ten resources, `book-1` through `book-10`, and `next_cursor` is the string `"10"`.
+
+Hand it back with `list_resources(cursor="10")` and the first resource is `book-11`, the new `next_cursor` is `"20"`.
+
+The tenth page comes back with `next_cursor` set to `None`. Done.
+
+## The client loop
+
+Every `list_*` method on `Client` (`list_tools`, `list_resources`, `list_resource_templates`, `list_prompts`) takes a `cursor=` keyword. Draining a paged list is one `while True`:
+
+```python title="client.py" hl_lines="9-15"
+# docs_src/pagination/tutorial002.py
+import anyio
+
+from mcp import Client
+from mcp.types import Resource
+
+
+async def list_all_resources(client: Client) -> list[Resource]:
+    resources: list[Resource] = []
+    cursor: str | None = None
+    while True:
+        page = await client.list_resources(cursor=cursor)
+        resources.extend(page.resources)
+        if page.next_cursor is None:
+            break
+        cursor = page.next_cursor
+    return resources
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        resources = await list_all_resources(client)
+        print(f"{len(resources)} resources")
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+* `cursor` starts as `None`, so the first request carries no cursor.
+* Extend **before** you look at `next_cursor`: the last page has resources too.
+* `next_cursor is None` is the exit. Anything else goes straight back into `cursor=`, untouched.
+
+With uvicorn still serving `server.py`, run `python client.py` in a second terminal. It prints `100 resources`: ten pages of ten, stitched together by a loop that never knew there were ten pages.
+
+This is the same loop **[The Client](https://py.sdk.modelcontextprotocol.io/client/index.md)** shows for every `list_*` verb, and it costs nothing against a server that doesn't page: `next_cursor` is `None` on the first response and the loop runs once.
+
+## The three rules
+
+**Cursors are opaque.** A client must never parse, build, or guess one. The only legal source of a cursor is the previous page's `next_cursor`, verbatim.
+
+**The server picks the page size.** There is no `limit=` in the protocol. If you need a different page size, you change the server.
+
+**A client that ignores paging still works.** It calls `list_resources()` once, gets the first ten, and never notices the `next_cursor` it threw away. Nothing breaks; it sees less.
+
+!!! check
+    Opaque means opaque. Invent a cursor (`list_resources(cursor="page-2")`) and there is
+    nothing the protocol can do for you. This server tries `int("page-2")`, the handler raises,
+    and what comes back to the client is:
+
+    ```text
+    MCPError(-32603, 'Internal server error', None)
+    ```
+
+    A cursor you didn't get from the server is a bug, not a feature request.
+
+## Recap
+
+* `MCPServer` returns everything in one page. Pagination is opt-in, and you opt in on the low-level `Server`.
+* `on_list_resources` (and `on_list_tools`, `on_list_prompts`, `on_list_resource_templates`) receives `PaginatedRequestParams | None`; `params.cursor` is `None` for the first page.
+* You return a page plus `next_cursor`: any string you'll recognise later, or `None` when there is nothing left.
+* The client loop: pass `cursor=`, accumulate, repeat until `next_cursor is None`.
+* Cursors are opaque, the server owns the page size, and a non-paging client still gets page one.
+
+The rest of the hand-written `Server` API (`on_call_tool`, `input_schema` dicts, `_meta`) is **[The low-level Server](https://py.sdk.modelcontextprotocol.io/advanced/low-level-server/index.md)**.
+
+# Middleware
+
+Source: https://py.sdk.modelcontextprotocol.io/advanced/middleware/
+
+A **middleware** is one async function that wraps every message your server receives.
+
+You write it as `async (ctx, call_next)` and append it to `server.middleware`. That is the whole API.
+
+!!! warning
+    The middleware list is marked **provisional** in the source: its signature and semantics may
+    change in a 2.x minor release. Use it to *observe* (timing, logging, tracing) and to
+    *refuse* messages; do not make it the foundation your server stands on.
+
+`MCPServer` takes the list at construction (`MCPServer(name, middleware=[...])`) and exposes it as
+`mcp.middleware`; the low-level `Server` exposes the same list as `server.middleware`. The example
+below uses the low-level `Server`; if `Server(name, on_call_tool=...)` is new to you, read
+**[The low-level Server](https://py.sdk.modelcontextprotocol.io/advanced/low-level-server/index.md)** first.
+
+## A timing middleware
+
+One server, one tool, one middleware that logs how long each message took:
+
+```python title="server.py" hl_lines="39-45 49"
+# docs_src/middleware/tutorial001.py
+import logging
+import time
+
+from mcp.server import Server, ServerRequestContext
+from mcp.server.context import CallNext, HandlerResult
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    TextContent,
+    Tool,
+)
+
+logger = logging.getLogger(__name__)
+
+
+async def on_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams | None) -> ListToolsResult:
+    return ListToolsResult(
+        tools=[
+            Tool(
+                name="search_books",
+                description="Search the catalog by title or author.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            )
+        ]
+    )
+
+
+async def on_call_tool(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
+    query = (params.arguments or {})["query"]
+    return CallToolResult(content=[TextContent(type="text", text=f"Found 3 books matching {query!r}.")])
+
+
+async def log_timing(ctx: ServerRequestContext, call_next: CallNext) -> HandlerResult:
+    start = time.perf_counter()
+    try:
+        return await call_next(ctx)
+    finally:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.info("%s took %.1f ms", ctx.method, elapsed_ms)
+
+
+server = Server("Bookshop", on_list_tools=on_list_tools, on_call_tool=on_call_tool)
+server.middleware.append(log_timing)
+```
+
+* `ctx` is the same `ServerRequestContext` your handlers receive. `ctx.method` is the raw
+  method string; `ctx.params` are the raw params, **before** any validation.
+* `call_next(ctx)` runs the rest of the chain: validation, the handler lookup, your handler.
+  Return what it returned and the response is untouched.
+* The `try`/`finally` is deliberate: a handler that raises is still timed, because the failure
+  reaches your middleware as the exception out of `call_next`.
+* `server.middleware.append(...)` registers it. The list runs outermost-first, so
+  `middleware[0]` is the one closest to the wire.
+
+### Try it
+
+Connect a client, list the tools, call one. Your log has **three** lines:
+
+```text
+server/discover took 18.3 ms
+tools/list took 0.1 ms
+tools/call took 0.1 ms
+```
+
+You made two calls and got three lines. The first is `server/discover`: the request the
+client sent to set the connection up, before you asked for anything.
+
+That is the point. Middleware wraps **every** inbound message:
+
+* The connection setup: `server/discover`, or `initialize` and `notifications/initialized`
+  on a legacy session.
+* Every request and every notification that reaches the server. For a notification,
+  `ctx.request_id is None`, `call_next(ctx)` returns `None`, and whatever you return is discarded.
+  (On the `2026-07-28` streamable-HTTP path a client's notification POST is acknowledged `202` at
+  the transport and never dispatched, so it does not reach middleware either; that revision
+  defines no client-to-server notifications over HTTP.)
+* Even a method the server has no handler for: `call_next` raises the
+  `MCPError(-32601, "Method not found")` *through* your middleware on its way to the client.
+
+## What you can do inside one
+
+In increasing order of how much you should hesitate:
+
+* **Observe.** Time it, count it, log it. The example above.
+* **Refuse.** Raise an `MCPError` *instead of* calling `call_next(ctx)` and that one message is
+  answered with a JSON-RPC error. The connection stays up; the next message goes through. This is
+  how a server gates `subscriptions/listen` per caller:
+  **[Deciding who may watch](https://py.sdk.modelcontextprotocol.io/handlers/subscriptions/index.md#deciding-who-may-watch)** on the
+  Subscriptions page walks through it.
+* **Rewrite.** `ctx` is a dataclass: `await call_next(dataclasses.replace(ctx, params=...))`
+  hands the rest of the chain different params than the client sent. Never do this to
+  `initialize`: the result the client gets back is built from your rewritten params, but the
+  server commits its connection state from the original wire params. The two sides can finish
+  the handshake disagreeing about what they negotiated.
+* **Answer.** Return a result without calling `call_next(ctx)` and it goes to the client as
+  your response. `call_next` hands you the finished wire form, and the pipeline never patches
+  what you return, so the whole envelope is yours: on a 2026-era connection that includes the
+  `serverInfo` `_meta` stamp, which the SDK adds to handler results but not to yours.
+
+!!! check
+    `initialize` is one of the things middleware wraps, and it is the *only* hook you get
+    for it. Try to take it over with `add_request_handler` and the SDK refuses:
+
+    ```text
+    ValueError: 'initialize' is handled by the server runner and cannot be overridden;
+    use Server.middleware to observe or wrap initialization
+    ```
+
+!!! warning
+    `initialize` is handled inline: the server reads no further inbound messages until your
+    middleware chain returns. Awaiting a server-to-client request (`ctx.session.send_request(...)`,
+    an elicitation) while handling `initialize` therefore **deadlocks the connection**: the
+    response you are waiting for can never be read. Fire-and-forget notifications are fine.
+
+## The one middleware that ships on by default
+
+The SDK ships exactly one middleware, and it is already on your server's list: the one that
+emits an OpenTelemetry span for every message. You don't append it, and most of the time you
+don't think about it. It is a no-op until you install an exporter, and it has its own page:
+**[OpenTelemetry](https://py.sdk.modelcontextprotocol.io/run/opentelemetry/index.md)**.
+
+!!! info
+    If you have written ASGI middleware, you already know this shape. Starlette's
+    `(scope, receive, send)` became `(ctx, call_next)`, and it runs *after* the transport, on
+    the decoded message instead of the raw HTTP request. The two compose: Starlette middleware
+    on `streamable_http_app()` sees HTTP; this sees MCP.
+
+## Recap
+
+* A middleware is `async (ctx, call_next) -> result`, passed as `MCPServer(middleware=[...])` (or
+  appended to `mcp.middleware`), and appended to `server.middleware` on the low-level `Server`.
+* It wraps **every** inbound message that reaches the server (`server/discover`, `initialize`,
+  requests, notifications, unknown methods) and runs outermost-first.
+* `ctx.request_id is None` is how you tell a notification from a request.
+* Raise instead of calling `call_next` to refuse one message; the connection survives.
+* The SDK's own OpenTelemetry tracing is a middleware too, already on the list. See
+  **[OpenTelemetry](https://py.sdk.modelcontextprotocol.io/run/opentelemetry/index.md)**.
+* The whole surface is provisional. Observe with it; don't build on it.
+
+That is everything that wraps a request. **[Authorization](https://py.sdk.modelcontextprotocol.io/run/authorization/index.md)** is what decides whether the request
+gets to run at all.
+
+# Extensions
+
+Source: https://py.sdk.modelcontextprotocol.io/advanced/extensions/
+
+An **extension** is an opt-in bundle of MCP behaviour behind one identifier.
+
+On a server it can contribute tools, resources, and new request methods, and it can wrap
+`tools/call`. On a client it can claim extra `tools/call` result shapes and observe vendor
+notifications. Each side advertises under its own `capabilities.extensions`, and nothing
+changes for anyone who didn't ask for it. That is the contract ([SEP-2133](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2133)), and
+it has one golden rule: **extensions are off by default**.
+
+## Using an extension
+
+Pass instances at construction:
+
+```python title="server.py"
+# docs_src/extensions/tutorial001.py
+from mcp.server.apps import Apps
+from mcp.server.mcpserver import MCPServer
+
+mcp = MCPServer("demo", extensions=[Apps()])
+```
+
+Done. The server now advertises `io.modelcontextprotocol/ui` under
+`capabilities.extensions` and serves everything the extension contributes.
+
+`Apps` is the built-in reference extension, and it gets its own page: **[MCP Apps](https://py.sdk.modelcontextprotocol.io/advanced/apps/index.md)**.
+
+!!! note
+    Extensions are fixed at construction. There is no `add_extension` to call later:
+    a server's capability map should not change while clients are connected to it.
+
+The capability map rides `server/discover`, which is a **2026-07-28** path. A legacy
+`initialize` handshake has nowhere to put it, so a legacy client simply doesn't see
+the extension. Design for that: an extension *augments* a server, it must not be the
+only way the server is usable.
+
+## Writing your own
+
+Subclass `Extension` and override only what you need. Every method has a default.
+
+### The identifier
+
+```python
+# docs_src/extensions/tutorial002.py
+from mcp.server.extension import Extension
+
+
+class Stamps(Extension):
+    identifier = "com.example/stamps"
+```
+
+The identifier is a `vendor-prefix/name` string following the spec's `_meta` key
+grammar: dot-separated labels (each starts with a letter, ends with a letter or
+digit), a slash, then the name. It is validated **when the class is defined**, so a
+typo doesn't wait for a server to boot:
+
+```text
+TypeError: Stamps.identifier must be a `vendor-prefix/name` string
+(reverse-DNS prefix required), got 'stamps'
+```
+
+Use a domain you control as the prefix. `io.modelcontextprotocol/*` is for extensions
+specified by the MCP project itself.
+
+### Contributing tools
+
+The smallest useful extension is one tool and a settings map:
+
+```python title="server.py" hl_lines="16 18-19 21-22 25"
+# docs_src/extensions/tutorial003.py
+from collections.abc import Sequence
+from typing import Any
+
+from mcp.server.extension import Extension, ToolBinding
+from mcp.server.mcpserver import MCPServer
+
+
+def stamp(text: str) -> str:
+    """Stamp a message with the office seal."""
+    return f"[stamped] {text}"
+
+
+class Stamps(Extension):
+    """A purely additive extension: one tool, one capability entry."""
+
+    identifier = "com.example/stamps"
+
+    def settings(self) -> dict[str, Any]:
+        return {"sealed": True}
+
+    def tools(self) -> Sequence[ToolBinding]:
+        return [ToolBinding(fn=stamp)]
+
+
+mcp = MCPServer("post-office", extensions=[Stamps()])
+```
+
+* `tools()` returns `ToolBinding`s. The server registers each one exactly as if you
+  had called `mcp.add_tool(...)` yourself: same schema generation, same `Context`
+  injection, same everything.
+* `settings()` is the value advertised at `capabilities.extensions["com.example/stamps"]`.
+  Return `{}` (the default) to advertise the extension with no settings.
+* The extension never receives the server. It declares contributions as data;
+  `MCPServer` consumes them. There is no `self.server` to mutate.
+
+Serve it over HTTP, and a client is the proof:
+
+```console
+uv run mcp run server.py --transport streamable-http
+```
+
+```python title="client.py" hl_lines="7-11"
+# docs_src/extensions/tutorial003_client.py
+import anyio
+
+from mcp import Client
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp") as client:
+        print(client.server_capabilities.extensions)
+        # {'com.example/stamps': {'sealed': True}}
+        result = await client.call_tool("stamp", {"text": "hello"})
+        print(result.content)
+        # [TextContent(type='text', text='[stamped] hello', annotations=None, meta=None)]
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+Every `server.py` on this page is served with that command, and every `client.py`
+runs beside it with `python client.py` from a second terminal.
+
+### Serving your own methods
+
+An extension can register **new request methods**: its own verbs, served next to the
+spec's:
+
+```python title="server.py" hl_lines="14-20 24 33-41"
+# docs_src/extensions/tutorial004.py
+from collections.abc import Sequence
+from typing import Any
+
+from pydantic import Field
+
+import mcp.types as types
+from mcp.server.context import ServerRequestContext
+from mcp.server.extension import Extension, MethodBinding
+from mcp.server.mcpserver import MCPServer, require_client_extension
+
+EXTENSION_ID = "com.example/search"
+
+
+class SearchParams(types.RequestParams):
+    query: str
+    limit: int = Field(default=10, ge=1, le=100)
+
+
+class SearchResult(types.Result):
+    items: list[str]
+
+
+async def search(ctx: ServerRequestContext[Any, Any], params: SearchParams) -> SearchResult:
+    require_client_extension(ctx, EXTENSION_ID)
+    return SearchResult(items=[f"{params.query}-{n}" for n in range(params.limit)])
+
+
+class Search(Extension):
+    """An extension that serves its own request method."""
+
+    identifier = EXTENSION_ID
+
+    def methods(self) -> Sequence[MethodBinding]:
+        return [
+            MethodBinding(
+                "com.example/search",
+                SearchParams,
+                search,
+                protocol_versions=frozenset({"2026-07-28"}),
+            )
+        ]
+
+
+mcp = MCPServer("catalog", extensions=[Search()])
+```
+
+* `SearchParams` subclasses `RequestParams`, so the 2026 `_meta` envelope parses
+  uniformly and your handler gets validated params, never a raw dict. Bound what
+  the client controls: `Field(ge=1, le=100)` rejects an absurd `limit` before
+  your code allocates anything for it.
+* `require_client_extension(ctx, EXTENSION_ID)` is the gate: a client that did not
+  declare the extension gets the `-32021` (missing required client capability) error,
+  with the machine-readable `requiredCapabilities` payload the spec asks for.
+* `protocol_versions=frozenset({"2026-07-28"})` pins the method to one wire version.
+  At any other version the client gets `METHOD_NOT_FOUND`, exactly as if the method
+  didn't exist there. For that client, it doesn't.
+
+Methods are **strictly additive**. The SDK enforces this at construction, not at
+runtime:
+
+* A `MethodBinding` for a spec-defined method (`tools/list`, `completion/complete`, ...)
+  raises `ValueError` when the binding is constructed. Core verbs belong to the server.
+* Two extensions binding the same method raise when the second one registers.
+  Last-write-wins is how plugins corrupt each other; we don't do that.
+* An empty `protocol_versions` set raises too: a method that can never be served
+  is a bug, not a configuration.
+
+### The client side
+
+The client is its own program, and it carries both halves of the client story:
+
+```python title="client.py" hl_lines="21-23 27-30"
+# docs_src/extensions/tutorial004_client.py
+from typing import Literal
+
+import anyio
+
+import mcp.types as types
+from mcp import Client
+from mcp.client import advertise
+
+EXTENSION_ID = "com.example/search"
+
+
+class SearchParams(types.RequestParams):
+    query: str
+    limit: int = 10
+
+
+class SearchResult(types.Result):
+    items: list[str]
+
+
+class SearchRequest(types.Request[SearchParams, Literal["com.example/search"]]):
+    method: Literal["com.example/search"] = "com.example/search"
+    params: SearchParams
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp", extensions=[advertise(EXTENSION_ID)]) as client:
+        request = SearchRequest(params=SearchParams(query="mcp", limit=3))
+        result = await client.session.send_request(request, SearchResult)
+        print(result.items)
+        # ['mcp-0', 'mcp-1', 'mcp-2']
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+* `Client(..., extensions=[advertise(EXTENSION_ID)])` declares the extension. The
+  declarations become `ClientCapabilities.extensions`: on a 2026-07-28 connection
+  the map travels in the per-request `_meta` envelope, so the server sees it on
+  **every** request; on a legacy connection it rides the `initialize` handshake.
+  Server code doesn't care which: `require_client_extension(ctx, ...)` and
+  `ctx.session.check_client_capability(...)` read the right source on both paths.
+* Vendor methods drop one layer to `client.session.send_request(...)`; `Client`
+  only grows first-class methods for spec verbs. `send_request` accepts any
+  `Request` subclass, so the vendor request passes as-is.
+* `SearchRequest` and the two models it carries are the extension's wire contract,
+  so the client declares them for itself. A published extension would ship them in
+  a package that both sides import.
+
+### Intercepting `tools/call`
+
+The one interceptive hook. Override `intercept_tool_call` to observe, short-circuit,
+or veto a tool call:
+
+```python title="server.py" hl_lines="17-24"
+# docs_src/extensions/tutorial005.py
+import logging
+from typing import Any
+
+from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
+from mcp.server.extension import Extension
+from mcp.server.mcpserver import MCPServer
+from mcp.types import CallToolRequestParams
+
+logger = logging.getLogger(__name__)
+
+
+class AuditLog(Extension):
+    """Observe every tools/call without touching its result."""
+
+    identifier = "com.example/audit"
+
+    async def intercept_tool_call(
+        self,
+        params: CallToolRequestParams,
+        ctx: ServerRequestContext[Any, Any],
+        call_next: CallNext,
+    ) -> HandlerResult:
+        logger.info("tool %r called", params.name)
+        return await call_next(ctx)
+
+
+mcp = MCPServer("audited", extensions=[AuditLog()])
+
+
+@mcp.tool()
+def add(a: int, b: int) -> int:
+    """Add two numbers."""
+    return a + b
+```
+
+* `params` is the validated `CallToolRequestParams`: you get `params.name` and
+  `params.arguments` without touching raw JSON. It is also what decides which
+  tool call runs: passing a rewritten context through `call_next` changes what
+  the handler observes on `ctx`, not the tool invocation. Wire-level request
+  rewriting belongs to [Middleware](https://py.sdk.modelcontextprotocol.io/advanced/middleware/index.md).
+* `call_next(ctx)` runs the rest of the chain and returns the handler's result.
+  Return it unchanged (observe), return something else (replace), or raise an
+  `MCPError` (refuse). Whatever you return is serialized like any handler
+  result, including the 2026-era `serverInfo` identity stamp, so a
+  short-circuiting interceptor never produces an anonymous or off-schema
+  response.
+* With several extensions, interceptors nest in registration order: the first
+  extension in `extensions=[...]` is outermost.
+* The default implementation is a pass-through, and a server whose extensions never
+  override this hook keeps the bare `tools/call` handler untouched. You don't
+  pay for what you don't use.
+
+The hook wraps `tools/call` and nothing else. For every-message concerns, use
+[Middleware](https://py.sdk.modelcontextprotocol.io/advanced/middleware/index.md). That is what it is for.
+
+## Using a client extension
+
+A **client extension** is the same contract from the consuming side: a bundle of
+client-side behaviour behind one identifier. The server here answers `buy` with a
+receipt to redeem instead of the goods, and only for a client that declared the
+extension:
+
+```python title="server.py" hl_lines="22-25"
+# docs_src/extensions/tutorial006.py
+from typing import Any
+
+import mcp.types as types
+from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
+from mcp.server.extension import Extension
+from mcp.server.mcpserver import MCPServer, require_client_extension
+
+EXTENSION_ID = "com.example/receipts"
+
+
+class ReceiptIssuer(Extension):
+    """Server half: answers `buy` with a receipt instead of a final result."""
+
+    identifier = EXTENSION_ID
+
+    async def intercept_tool_call(
+        self,
+        params: types.CallToolRequestParams,
+        ctx: ServerRequestContext[Any, Any],
+        call_next: CallNext,
+    ) -> HandlerResult:
+        if params.name != "buy":
+            return await call_next(ctx)
+        require_client_extension(ctx, EXTENSION_ID)
+        return {"resultType": "receipt", "receiptToken": "r-117"}
+
+
+mcp = MCPServer("shop", extensions=[ReceiptIssuer()])
+
+
+@mcp.tool()
+def buy(item: str) -> types.CallToolResult:
+    """Buy an item."""
+    raise NotImplementedError  # ReceiptIssuer answers `buy` before the tool runs
+
+
+@mcp.tool()
+def redeem(token: str) -> str:
+    """Exchange a receipt token for the goods."""
+    return f"goods for {token}"
+```
+
+On the client, pass instances to `Client(extensions=[...])` and call tools normally:
+
+```python title="client.py" hl_lines="33-35"
+# docs_src/extensions/tutorial006_client.py
+from collections.abc import Sequence
+from typing import Any, Literal
+
+import anyio
+
+import mcp.types as types
+from mcp import Client
+from mcp.client import ClaimContext, ClientExtension, ResultClaim
+
+EXTENSION_ID = "com.example/receipts"
+
+
+class ReceiptResult(types.Result):
+    """The claimed result shape; `result_type` pins the wire tag."""
+
+    result_type: Literal["receipt"] = "receipt"
+    receipt_token: str
+
+
+class Receipts(ClientExtension):
+    """Client half: claims the `receipt` shape and supplies the code that finishes it."""
+
+    identifier = EXTENSION_ID
+
+    def claims(self) -> Sequence[ResultClaim[Any]]:
+        return [ResultClaim(result_type="receipt", model=ReceiptResult, resolve=self._redeem)]
+
+    async def _redeem(self, claimed: ReceiptResult, ctx: ClaimContext) -> types.CallToolResult:
+        return await ctx.session.call_tool("redeem", {"token": claimed.receipt_token})
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp", extensions=[Receipts()]) as client:
+        result = await client.call_tool("buy", {"item": "lamp"})
+        print(result.content)
+        # [TextContent(type='text', text='goods for r-117', annotations=None, meta=None)]
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+`call_tool("buy", ...)` returns a plain `CallToolResult`, like every other call. What
+the extension changed: the server may now answer `buy` with a `receipt` **result
+shape** instead of a final result, and `Receipts` finishes it (here by redeeming the
+receipt with a follow-up call) before `call_tool` returns. Nothing about the call
+site moves.
+
+Drop the extension and none of this exists: the server's gate refuses a client
+that did not declare it (error -32021), and a claimed shape from a server that
+skips the gate fails validation, exactly as the spec requires for an
+unrecognized `resultType`. Off by default, on both ends of the wire.
+
+To advertise an identifier with **no** client-side behaviour (the server gates on
+the capability, the client does nothing, as in the search client above), use
+`advertise()`:
+
+```python
+from mcp.client import advertise
+
+client = Client("http://localhost:8000/mcp", extensions=[advertise("com.example/search")])
+```
+
+## Writing a client extension
+
+Subclass `ClientExtension` and override only what you need. Three contribution
+kinds, each with a default: `settings()`, `claims()`, and `notifications()`.
+
+```python title="client.py" hl_lines="16-17 25-26 28-29"
+# docs_src/extensions/tutorial006_client.py
+from collections.abc import Sequence
+from typing import Any, Literal
+
+import anyio
+
+import mcp.types as types
+from mcp import Client
+from mcp.client import ClaimContext, ClientExtension, ResultClaim
+
+EXTENSION_ID = "com.example/receipts"
+
+
+class ReceiptResult(types.Result):
+    """The claimed result shape; `result_type` pins the wire tag."""
+
+    result_type: Literal["receipt"] = "receipt"
+    receipt_token: str
+
+
+class Receipts(ClientExtension):
+    """Client half: claims the `receipt` shape and supplies the code that finishes it."""
+
+    identifier = EXTENSION_ID
+
+    def claims(self) -> Sequence[ResultClaim[Any]]:
+        return [ResultClaim(result_type="receipt", model=ReceiptResult, resolve=self._redeem)]
+
+    async def _redeem(self, claimed: ReceiptResult, ctx: ClaimContext) -> types.CallToolResult:
+        return await ctx.session.call_tool("redeem", {"token": claimed.receipt_token})
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp", extensions=[Receipts()]) as client:
+        result = await client.call_tool("buy", {"item": "lamp"})
+        print(result.content)
+        # [TextContent(type='text', text='goods for r-117', annotations=None, meta=None)]
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+* The identifier follows the same grammar as the server's, validated when the class
+  is defined.
+* `claims()` returns `ResultClaim`s: a wire tag, the model that parses it, and the
+  resolver that finishes it. The model must pin the tag with
+  `result_type: Literal["receipt"]` and must not subclass the verb's core result
+  types; both are enforced when the claim is constructed. Vendor fields like
+  `receipt_token` ride the wire as-is: a substituted shape reaches the client
+  verbatim.
+* The resolver receives the parsed model and a `ClaimContext`; `ctx.session` is the
+  same public handle as `client.session`, so follow-ups are ordinary session calls.
+  It returns the verb's normal `CallToolResult`.
+* `settings()` is the value advertised at `ClientCapabilities.extensions[identifier]`,
+  read once at `Client` construction.
+
+`notifications()` declares vendor server notifications to observe:
+
+```python
+def notifications(self) -> Sequence[NotificationBinding[Any]]:
+    return [NotificationBinding(method="notifications/receipts", params_type=ReceiptEvent, handler=self.on_receipt)]
+```
+
+The handler receives validated params one at a time, in dispatch order. It observes; it cannot veto
+or reply.
+
+Two quiet rules. Claims are active on 2026-07-28 connections only, and the capability
+ad follows them: on a legacy connection the claims dissolve and the identifier drops
+out of the ad with them, so the client never advertises an extension whose shapes it
+would reject. And when you want the claimed shape yourself instead of the resolver,
+call `client.session.call_tool(..., allow_claimed=True)`; without that flag, a
+claimed shape reaching a session-tier caller raises `UnexpectedClaimedResult`.
+
+### Extension verbs
+
+An extension's own request methods need no client-side registration. A vendor request
+type subclasses `mcp.types.Request` and goes through `client.session.send_request`,
+as in [Serving your own methods](#serving-your-own-methods). Take a server whose
+extension serves one verb about a named job:
+
+```python title="server.py" hl_lines="12-13 30"
+# docs_src/extensions/tutorial007.py
+from collections.abc import Sequence
+from typing import Any
+
+import mcp.types as types
+from mcp.server.context import ServerRequestContext
+from mcp.server.extension import Extension, MethodBinding
+from mcp.server.mcpserver import MCPServer
+
+EXTENSION_ID = "com.example/jobs"
+
+
+class JobParams(types.RequestParams):
+    job_id: str
+
+
+class JobStatus(types.Result):
+    status: str
+
+
+async def job_status(ctx: ServerRequestContext[Any, Any], params: JobParams) -> JobStatus:
+    return JobStatus(status=f"{params.job_id} is running")
+
+
+class Jobs(Extension):
+    """An extension whose verb names its subject, so the header can route on it."""
+
+    identifier = EXTENSION_ID
+
+    def methods(self) -> Sequence[MethodBinding]:
+        return [MethodBinding("com.example/jobs.status", JobParams, job_status)]
+
+
+mcp = MCPServer("worker", extensions=[Jobs()])
+```
+
+One addition on the client: when a params key must ride the `Mcp-Name` header
+(extension specs such as tasks require this for their verbs), the request type
+declares `name_param`:
+
+```python title="client.py" hl_lines="20-23 28-29"
+# docs_src/extensions/tutorial007_client.py
+from typing import Literal
+
+import anyio
+
+import mcp.types as types
+from mcp import Client
+from mcp.client import advertise
+
+EXTENSION_ID = "com.example/jobs"
+
+
+class JobParams(types.RequestParams):
+    job_id: str
+
+
+class JobStatus(types.Result):
+    status: str
+
+
+class JobStatusRequest(types.Request[JobParams, Literal["com.example/jobs.status"]]):
+    method: Literal["com.example/jobs.status"] = "com.example/jobs.status"
+    params: JobParams
+    name_param = "jobId"  # params["jobId"] rides the Mcp-Name header
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp", extensions=[advertise(EXTENSION_ID)]) as client:
+        request = JobStatusRequest(params=JobParams(job_id="job-7"))
+        result = await client.session.send_request(request, JobStatus)
+        print(result.status)
+        # job-7 is running
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+The session mirrors `params["jobId"]` into `Mcp-Name` on every send path, and a
+missing value fails loudly rather than silently omitting a required header.
+
+## What an extension cannot do
+
+The contribution surface is **closed** on purpose. On the server: settings, tools,
+resources, methods, one `tools/call` interceptor. On the client: settings, result
+claims, notification bindings. An extension cannot:
+
+* **Reach into the host.** It declares data; it holds no server or client reference.
+* **Replace core behaviour.** Spec methods and core result tags are rejected at
+  construction (`initialize` is reserved by the runner outright); a notification
+  binding shadowed by core vocabulary goes quiet with a warning instead.
+* **Register late.** After `MCPServer(...)` or `Client(...)` returns, the extension
+  set is what it is.
+
+If you are fighting these walls, you are not writing an extension. You are writing
+a fork. The walls are the feature: a user reading `extensions=[Apps(), Stamps()]`
+knows *everything* those two can have touched.
+
+# MCP Apps
+
+Source: https://py.sdk.modelcontextprotocol.io/advanced/apps/
+
+An **MCP App** is a tool with a face: alongside its data, the tool points at an HTML
+document the host renders as an interactive surface.
+
+Two parts, always two parts:
+
+1. **A tool** that does the work and returns data, like any other tool.
+2. **A `ui://` resource** containing the HTML the host shows for it.
+
+The tool carries a `_meta.ui.resourceUri` reference to the resource. The host fetches
+it with `resources/read`, renders it in a **sandboxed iframe**, and pushes the tool's
+result into that iframe via `postMessage`. Your server never sends or receives any
+`ui/*` messages: that traffic is between the host and the iframe. You serve a tool
+and an HTML document; the host does the theater.
+
+The SDK ships this as the built-in `Apps` extension (`io.modelcontextprotocol/ui`).
+If [Extensions](https://py.sdk.modelcontextprotocol.io/advanced/extensions/index.md) are new to you, skim that page first. One minute,
+then come back.
+
+## A clock with a face
+
+```python title="server.py" hl_lines="17 20 28 30"
+# docs_src/apps/tutorial001.py
+from mcp.server.apps import Apps, client_supports_apps
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.context import Context
+
+CLOCK_HTML = """\
+<!doctype html>
+<title>Clock</title>
+<h1 id="now">...</h1>
+<script>
+  window.addEventListener("message", (event) => {
+    const text = event.data?.result?.content?.[0]?.text;
+    if (text) document.getElementById("now").textContent = text;
+  });
+</script>
+"""
+
+apps = Apps()
+
+
+@apps.tool(resource_uri="ui://clock/app.html", description="The current time.")
+def get_time(ctx: Context) -> str:
+    now = "2026-06-26T12:00:00Z"
+    if not client_supports_apps(ctx):
+        return f"The time is {now}."
+    return now
+
+
+apps.add_html_resource("ui://clock/app.html", CLOCK_HTML, title="Clock")
+
+mcp = MCPServer("clock", extensions=[apps])
+```
+
+Four moves:
+
+* `Apps()`: one instance holds your UI-bound tools and their resources.
+* `@apps.tool(resource_uri="ui://clock/app.html")`: a regular tool, plus the
+  `_meta.ui.resourceUri` stamp. Everything `@mcp.tool()` accepts (name, title,
+  description, ...) passes through.
+* `apps.add_html_resource("ui://clock/app.html", CLOCK_HTML)`: the matching
+  resource, served as `text/html;profile=mcp-app`. That exact MIME type is what
+  tells a host "this is an app, render it".
+* `MCPServer("clock", extensions=[apps])`: opt in. The server now advertises
+  `io.modelcontextprotocol/ui` under `capabilities.extensions`.
+
+The HTML itself listens for the host's `postMessage` and shows the result. For real
+apps, use the official [`@modelcontextprotocol/ext-apps`](https://github.com/modelcontextprotocol/ext-apps)
+browser SDK inside your HTML. It gives you `ontoolresult`, `callServerTool`,
+`getHostContext`, and `onhostcontextchanged` instead of raw message events.
+
+## Graceful degradation
+
+Not every client renders apps. The spec is blunt about what that means for you:
+
+> Tools **MUST** return a meaningful `content` array even when UI is available.
+
+The model reads `content`; the iframe is for humans. A UI-capable host still feeds
+the text result to the model, and a text-only client gets *only* that. So the
+canonical pattern is one tool, two answers. Look at `get_time` again:
+
+```python title="server.py" hl_lines="21-25"
+# docs_src/apps/tutorial001.py
+from mcp.server.apps import Apps, client_supports_apps
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.context import Context
+
+CLOCK_HTML = """\
+<!doctype html>
+<title>Clock</title>
+<h1 id="now">...</h1>
+<script>
+  window.addEventListener("message", (event) => {
+    const text = event.data?.result?.content?.[0]?.text;
+    if (text) document.getElementById("now").textContent = text;
+  });
+</script>
+"""
+
+apps = Apps()
+
+
+@apps.tool(resource_uri="ui://clock/app.html", description="The current time.")
+def get_time(ctx: Context) -> str:
+    now = "2026-06-26T12:00:00Z"
+    if not client_supports_apps(ctx):
+        return f"The time is {now}."
+    return now
+
+
+apps.add_html_resource("ui://clock/app.html", CLOCK_HTML, title="Clock")
+
+mcp = MCPServer("clock", extensions=[apps])
+```
+
+`client_supports_apps(ctx)` is `True` only when the client declared the
+`io.modelcontextprotocol/ui` extension **and** listed `text/html;profile=mcp-app`
+in its `mimeTypes` settings. The field is required, so a client that omits it
+does not count. Here is the client half of the negotiation:
+
+```python title="client.py" hl_lines="8 12"
+# docs_src/apps/tutorial001_client.py
+import anyio
+
+from mcp import Client
+from mcp.client import advertise
+from mcp.server.apps import APP_MIME_TYPE, EXTENSION_ID
+from mcp.types import TextContent
+
+APPS_SUPPORT = advertise(EXTENSION_ID, {"mimeTypes": [APP_MIME_TYPE]})
+
+
+async def main() -> None:
+    async with Client("http://localhost:8000/mcp", extensions=[APPS_SUPPORT]) as client:
+        result = await client.call_tool("get_time", {})
+        for block in result.content:
+            if isinstance(block, TextContent):
+                print(block.text)
+
+
+if __name__ == "__main__":
+    anyio.run(main)
+```
+
+Serve `server.py` over HTTP, then run the client from a second terminal:
+
+```console
+uv run mcp run server.py --transport streamable-http
+```
+
+```console
+python client.py
+```
+
+```text
+2026-06-26T12:00:00Z
+```
+
+The rich answer came back. Drop `extensions=[APPS_SUPPORT]` from the `Client` call
+and the same program prints `The time is 2026-06-26T12:00:00Z.` instead, which is
+all a text-only client ever sees.
+
+!!! warning
+    Never return a placeholder like `"[Rendered UI]"` as the only content. If the
+    fallback text is useless, the tool is useless to every text-only client and to
+    the model itself. Write the sentence.
+
+## Locking the iframe down
+
+The resource side carries the security metadata: what the iframe may load, which
+browser permissions it wants, how it would like to be framed:
+
+```python title="server.py" hl_lines="9 19-22"
+# docs_src/apps/tutorial002.py
+from mcp.server.apps import Apps, ResourceCsp, ResourcePermissions
+from mcp.server.mcpserver import MCPServer
+
+DASHBOARD_HTML = "<!doctype html><title>Dashboard</title><canvas id='chart'></canvas>"
+
+apps = Apps()
+
+
+@apps.tool(resource_uri="ui://dashboard/app.html", visibility=["app"])
+def refresh_dashboard() -> str:
+    """Refresh the dashboard data."""
+    return "refreshed"
+
+
+apps.add_html_resource(
+    "ui://dashboard/app.html",
+    DASHBOARD_HTML,
+    title="Dashboard",
+    csp=ResourceCsp(connect_domains=["https://api.example.com"]),
+    permissions=ResourcePermissions(clipboard_write={}),
+    domain="dashboard.example.com",
+    prefers_border=True,
+)
+
+mcp = MCPServer("dashboard", extensions=[apps])
+```
+
+`csp` and `permissions` are **requests to the host**, not server behaviour. The host
+builds the iframe's Content-Security-Policy and Permissions-Policy from them, and it
+may refuse. Feature-detect in your JS rather than assuming a grant.
+
+`ResourceCsp`, field by field (Python name, wire key, what the host does with it):
+
+| Python | Wire (`_meta.ui.csp`) | Controls |
+|---|---|---|
+| `connect_domains` | `connectDomains` | `connect-src`: where `fetch`/XHR may go |
+| `resource_domains` | `resourceDomains` | `img-src`, `style-src`, ...: static assets |
+| `frame_domains` | `frameDomains` | `frame-src`: nested iframes |
+| `base_uri_domains` | `baseUriDomains` | `base-uri`: what `<base>` may point at |
+
+`ResourcePermissions`: each field requests a browser permission for the iframe.
+
+| Python | Wire (`_meta.ui.permissions`) |
+|---|---|
+| `camera` | `camera` |
+| `microphone` | `microphone` |
+| `geolocation` | `geolocation` |
+| `clipboard_write` | `clipboardWrite` |
+
+!!! note
+    CSP and permissions live on the **resource**, never on the tool. The spec's tool
+    metadata has no slot for them, and hosts ignore them there. The SDK makes the
+    mistake unrepresentable: `@apps.tool()` simply has no `csp` parameter.
+
+### Visibility
+
+`visibility=["app"]` on a tool says "this exists for the iframe, not the model":
+
+* `"model"`: the model may call it.
+* `"app"`: the iframe may call it (via `callServerTool`).
+* Omitted: both, which is the default.
+
+Filtering is the **host's** job. Your server lists app-only tools in `tools/list`
+like any other; the host hides them from the model. Don't filter server-side.
+
+## The rules the SDK enforces
+
+All of these fail at startup, not in production:
+
+* A `resource_uri` or resource URI that isn't `ui://...` is a `ValueError` at
+  decoration/registration time.
+* A tool bound to a URI with **no matching registered resource** is a `ValueError`
+  when `MCPServer(extensions=[apps])` consumes the extension. A tool advertising
+  HTML that 404s on `resources/read` is a misconfiguration, so it refuses to
+  construct.
+* `meta={"ui": ...}` on `@apps.tool()` is a `ValueError`. The decorator owns
+  `_meta["ui"]`; say it with `resource_uri=` and `visibility=`. Other `meta=` keys
+  merge fine alongside.
+
+Neither the TypeScript ext-apps SDK nor FastMCP catches any of these today; we'd
+rather you find out before a host does.
+
+## Beyond inline HTML
+
+`add_html_resource` covers the common case: a string of HTML. For anything else,
+HTML on disk or generated content, build the resource yourself and hand it over:
+
+```python title="server.py" hl_lines="12 18"
+# docs_src/apps/tutorial003.py
+from pathlib import Path
+
+from mcp.server.apps import Apps
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.resources import FileResource
+
+REPORT_HTML = Path(__file__).parent / "report.html"
+
+apps = Apps()
+
+
+@apps.tool(resource_uri="ui://report/app.html")
+def refresh_report() -> str:
+    """Refresh the report data."""
+    return "report refreshed"
+
+
+apps.add_resource(FileResource(uri="ui://report/app.html", name="report", path=REPORT_HTML))
+
+mcp = MCPServer("report", extensions=[apps])
+```
+
+`add_resource` fills in the `text/html;profile=mcp-app` MIME type when the resource
+doesn't set one explicitly, and rejects an explicit mismatch: a `ui://` resource
+under any other MIME type is one no host will render.
+
+!!! tip
+    Targeting a pre-GA host that still reads the deprecated flat
+    `_meta["ui/resourceUri"]` key? Merge it yourself:
+    `@apps.tool(resource_uri="ui://x", meta={"ui/resourceUri": "ui://x"})`.
+    The nested `ui` object is the spec shape; the flat key is on its way out.
+
+## See it run
+
+The `apps` story in `examples/stories/` is this page as a runnable pair: a server
+with a UI-bound clock tool and a client that negotiates Apps, reads the tool's
+`_meta.ui.resourceUri`, fetches the HTML, and calls the tool.
+
+```bash
+uv run python -m stories.apps.client
+```
