@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AnythingLLM 文档上传</title>
+<style>
+  body { font: 14px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 680px;
+         margin: 40px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  p.sub { color: #666; margin-top: 0; }
+  label { display: block; font-size: 13px; color: #555; margin: 14px 0 4px; }
+  input { width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px;
+          font-size: 13px; box-sizing: border-box; }
+  button { margin-top: 16px; padding: 9px 20px; border: 0; border-radius: 6px;
+           background: #2563eb; color: #fff; font-size: 14px; cursor: pointer; }
+  button:disabled { background: #9ca3af; cursor: not-allowed; }
+  #drop { margin-top: 16px; padding: 28px; border: 2px dashed #ccc; border-radius: 8px;
+          text-align: center; color: #666; cursor: pointer; }
+  #drop.on { border-color: #2563eb; background: #eff6ff; }
+  #files { margin-top: 12px; font-size: 13px; }
+  #files div { padding: 5px 0; border-bottom: 1px solid #eee; }
+  #log { margin-top: 14px; font: 12px/1.5 Consolas, monospace; color: #444;
+         white-space: pre-wrap; max-height: 220px; overflow: auto; }
+  .ok { color: #16a34a; } .bad { color: #dc2626; }
+</style>
+</head>
+<body>
+
+<h1>AnythingLLM 文档上传</h1>
+<p class="sub">上传到第一个工作区并完成向量化嵌入</p>
+
+<label>AnythingLLM 地址</label>
+<input id="base" value="http://localhost:3001">
+
+<label>API Key（在 AnythingLLM「设置 → 工具 → 开发者 API」创建）</label>
+<input id="key" type="password" placeholder="sk-...">
+
+<label>工作区</label>
+<input id="ws" placeholder="留空 = 自动使用第一个工作区">
+
+<div id="drop">把文件拖到这里，或点击选择（可多选）</div>
+<input id="file" type="file" multiple hidden>
+<div id="files"></div>
+
+<button id="go" disabled>上传并嵌入</button>
+<div id="log"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const base = () => $('base').value.trim().replace(/\/+$/, '');
+const auth = () => ({ Authorization: 'Bearer ' + $('key').value.trim() });
+let picked = [];
+
+const log = (msg, cls) => {
+  const d = document.createElement('div');
+  if (cls) d.className = cls;
+  d.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  $('log').prepend(d);
+};
+
+// 选文件
+$('drop').onclick = () => $('file').click();
+$('drop').ondragover = e => { e.preventDefault(); $('drop').classList.add('on'); };
+$('drop').ondragleave = () => $('drop').classList.remove('on');
+$('drop').ondrop = e => { e.preventDefault(); $('drop').classList.remove('on'); add(e.dataTransfer.files); };
+$('file').onchange = () => { add($('file').files); $('file').value = ''; };
+
+function add(list) {
+  for (const f of list) picked.push(f);
+  render();
+}
+function render() {
+  $('files').innerHTML = '';
+  picked.forEach((f, i) => {
+    const d = document.createElement('div');
+    d.textContent = `${f.name}  (${(f.size / 1024).toFixed(1)} KB)`;
+    const x = document.createElement('button');
+    x.textContent = '移除'; x.style.cssText = 'margin-left:10px;padding:1px 8px;font-size:12px;background:#e5e7eb;color:#333';
+    x.onclick = () => { picked.splice(i, 1); render(); };
+    d.appendChild(x);
+    $('files').appendChild(d);
+  });
+  $('go').disabled = picked.length === 0;
+}
+
+// 取第一个工作区的 slug
+async function resolveWorkspace() {
+  const typed = $('ws').value.trim();
+  if (typed) return typed;
+  const r = await fetch(`${base()}/api/v1/workspaces`, { headers: auth() });
+  if (!r.ok) throw new Error(`读取工作区失败 HTTP ${r.status}（检查地址与 Key）`);
+  const data = await r.json();
+  const list = data.workspaces || [];
+  if (!list.length) throw new Error('AnythingLLM 里还没有工作区，请先建一个');
+  return list[0].slug;
+}
+
+// POST /api/v1/document/upload  → 再 /update-embeddings
+async function uploadOne(file, slug) {
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  // 注意：不要手动设 Content-Type，让浏览器自动带 multipart boundary
+  const up = await fetch(`${base()}/api/v1/document/upload`, {
+    method: 'POST', headers: auth(), body: fd
+  });
+  const txt = await up.text();
+  if (!up.ok) throw new Error(`上传失败 HTTP ${up.status}: ${txt.slice(0, 160)}`);
+
+  let folder = '';
+  try {
+    const j = JSON.parse(txt);
+    const doc = (j.documents && j.documents[0]) || j.document || null;
+    if (doc && doc.location) folder = doc.location;
+  } catch (_) {}
+
+  if (!folder) return '已上传，但未取得文件位置，请到 AnythingLLM 手动加入工作区';
+
+  const emb = await fetch(`${base()}/api/v1/workspace/${encodeURIComponent(slug)}/update-embeddings`, {
+    method: 'POST',
+    headers: { ...auth(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ adds: [folder] })
+  });
+  if (!emb.ok) throw new Error(`嵌入失败 HTTP ${emb.status}: ${(await emb.text()).slice(0, 160)}`);
+  return '已上传并嵌入';
+}
+
+$('go').onclick = async () => {
+  $('go').disabled = true;
+  log('开始处理…');
+  let slug;
+  try {
+    slug = await resolveWorkspace();
+    log(`使用工作区: ${slug}`);
+  } catch (e) {
+    log(e.message, 'bad'); $('go').disabled = false; return;
+  }
+  for (const f of picked) {
+    try {
+      const msg = await uploadOne(f, slug);
+      log(`${f.name} → ${msg}`, 'ok');
+    } catch (e) {
+      log(`${f.name} → ${e.message}`, 'bad');
+    }
+  }
+  $('go').disabled = false;
+};
+</script>
+</body>
+</html>

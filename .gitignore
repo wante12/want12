@@ -1,0 +1,31 @@
+# Python 虚拟环境（每个约 66MB，绝对不要提交）
+.venv/
+venv/
+env/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# 密钥与本地配置
+.env
+config.ini
+*.key
+
+# Agent 练习的产出物（6MB 二进制，非代码）
+Agent/Practice02/Mermaid.mmd
+Agent/wAgent/Mermaid.mmd
+
+# 宠物医院服务端二进制与数据（谢老师提供，非本人代码）
+PetHospitalServer/pethospital.exe
+PetHospitalServer/data/
+
+# 编辑器
+.vscode/
+.idea/
+
+# 系统文件
+Thumbs.db
+.DS_Store

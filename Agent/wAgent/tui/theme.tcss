@@ -1,0 +1,200 @@
+/* wAgent TUI 主题
+   配色参考：深色终端 + 左侧色条区分角色
+   橙 = 用户 · 蓝 = 助手 · 绿 = 工具 · 红 = 错误
+*/
+
+Screen {
+    background: #0d1117;
+    color: #c9d1d9;
+}
+
+/* ---------------------------------------------------------------- 顶栏 */
+#topbar {
+    height: auto;
+    padding: 1 2 1 2;
+    background: #0d1117;
+    border-bottom: solid #21262d;
+    color: #8b949e;
+}
+
+#topbar .brand {
+    color: #f0f6fc;
+    text-style: bold;
+}
+
+/* ---------------------------------------------------------------- 主区域 */
+#main {
+    height: 1fr;
+}
+
+#chat {
+    width: 1fr;
+    padding: 1 2 1 2;
+    scrollbar-size-vertical: 1;
+}
+
+/* ---------------------------------------------------------------- 侧栏 */
+#sidebar {
+    width: 38;
+    background: #010409;
+    border-left: solid #21262d;
+    padding: 1 2 1 1;
+}
+
+#sidebar.hidden {
+    display: none;
+}
+
+.side-title {
+    color: #58a6ff;
+    text-style: bold;
+    margin-top: 1;
+}
+
+.side-key {
+    color: #6e7681;
+}
+
+.side-val {
+    color: #c9d1d9;
+}
+
+.tool-name {
+    color: #7ee787;
+    text-style: bold;
+}
+
+.tool-desc {
+    color: #6e7681;
+    padding-left: 1;
+}
+
+/* ---------------------------------------------------------------- 消息卡片 */
+.msg {
+    height: auto;
+    margin-bottom: 1;
+    padding: 0 1 0 1;
+}
+
+/* 用户：橙色左条 */
+.msg-user {
+    border-left: thick #f0883e;
+}
+
+.msg-user .role {
+    color: #f0883e;
+    text-style: bold;
+}
+
+/* 助手：蓝色左条 */
+.msg-assistant {
+    border-left: thick #58a6ff;
+}
+
+.msg-assistant .role {
+    color: #58a6ff;
+    text-style: bold;
+}
+
+/* 错误：红色左条 */
+.msg-error {
+    border-left: thick #f85149;
+}
+
+.msg-error .role {
+    color: #f85149;
+    text-style: bold;
+}
+
+.msg-body {
+    padding-left: 1;
+}
+
+/* ---------------------------------------------------------------- 工具卡片 */
+.tool-card {
+    height: auto;
+    margin-bottom: 1;
+    border-left: thick #3fb950;
+    background: #0d1117;
+}
+
+.tool-card > Collapsible {
+    background: #0d1117;
+    border: none;
+    padding: 0;
+}
+
+.tool-card CollapsibleTitle {
+    color: #3fb950;
+}
+
+.tool-card .section-label {
+    color: #6e7681;
+    margin-top: 1;
+}
+
+.tool-card .section-body {
+    color: #a5d6ff;
+    padding-left: 2;
+}
+
+/* 工具执行中：黄色左条 */
+.tool-card.running {
+    border-left: thick #d29922;
+}
+
+.tool-card.running CollapsibleTitle {
+    color: #d29922;
+}
+
+/* ---------------------------------------------------------------- 输入区 */
+#input-area {
+    height: auto;
+    padding: 0 1 1 1;
+    border-top: solid #21262d;
+}
+
+#input {
+    border: round #30363d;
+    background: #0d1117;
+    color: #f0f6fc;
+}
+
+#input:focus {
+    border: round #58a6ff;
+}
+
+/* ---------------------------------------------------------------- 状态栏 */
+#statusbar {
+    height: 1;
+    background: #010409;
+    color: #8b949e;
+    padding: 0 1 0 1;
+}
+
+#statusbar .ok {
+    color: #3fb950;
+}
+
+#statusbar .busy {
+    color: #d29922;
+}
+
+#statusbar .err {
+    color: #f85149;
+}
+
+/* ---------------------------------------------------------------- 帮助弹窗 */
+HelpScreen {
+    align: center middle;
+    background: #0d1117 70%;
+}
+
+#help-box {
+    width: 76;
+    height: auto;
+    max-height: 90%;
+    background: #0d1117;
+    border: round #58a6ff;
+    padding: 1 2 1 2;
+}
