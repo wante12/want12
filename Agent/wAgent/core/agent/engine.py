@@ -33,15 +33,27 @@ class Agent:
         settings: AgentSettings,
         client: LLMClient,
         registry: ToolRegistry,
+        system_prompt_extra: str = "",
     ) -> None:
         self._settings = settings
         self._client = client
         self._registry = registry
+        self._system_prompt = self._compose(settings.system_prompt, system_prompt_extra)
         self._messages: list[dict[str, Any]] = [
-            {"role": "system", "content": settings.system_prompt}
+            {"role": "system", "content": self._system_prompt}
         ]
 
+    @staticmethod
+    def _compose(base: str, extra: str) -> str:
+        extra = (extra or "").strip()
+        return f"{base}\n\n{extra}" if extra else base
+
     # ------------------------------------------------------------------ 状态
+    @property
+    def system_prompt(self) -> str:
+        """实际发送给模型的 System Prompt（含技能清单等扩展段）。"""
+        return self._system_prompt
+
     @property
     def history(self) -> list[dict[str, Any]]:
         """当前对话历史（只读副本）。"""
@@ -62,8 +74,8 @@ class Agent:
         ]
 
     def reset(self) -> None:
-        """清空对话，保留 system prompt。"""
-        self._messages = [{"role": "system", "content": self._settings.system_prompt}]
+        """清空对话，保留 system prompt（含技能清单）。"""
+        self._messages = [{"role": "system", "content": self._system_prompt}]
 
     # ------------------------------------------------------------------ 主流程
     def stream_reply(self, user_prompt: str) -> Iterator[AgentEvent]:

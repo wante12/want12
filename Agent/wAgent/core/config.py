@@ -133,6 +133,27 @@ class SearchSettings:
 
 
 @dataclass(frozen=True)
+class McpSettings:
+    """MCP 客户端配置。
+
+    配置文件固定放在「项目根」下（程序启动时的当前工作目录），
+    不是源代码目录——这样同一套 wAgent 可以在不同项目里连接不同的 MCP Server。
+    """
+
+    #: 配置文件名
+    filename: str = ".mcp.json"
+    #: 建连超时（秒）
+    connect_timeout: float = 10.0
+    #: 单次工具调用超时（秒）
+    call_timeout: float = 60.0
+    #: 是否在工具名冲突时加服务器名前缀（auto / always / never）
+    prefix_mode: str = "auto"
+
+    def __repr__(self) -> str:
+        return f"McpSettings(filename={self.filename!r}, prefix_mode={self.prefix_mode!r})"
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """应用配置聚合。"""
 
@@ -142,6 +163,7 @@ class AppConfig:
     fetch: FetchSettings = field(default_factory=FetchSettings)
     cli: CliSettings = field(default_factory=CliSettings)
     fs: FsSettings = field(default_factory=FsSettings)
+    mcp: McpSettings = field(default_factory=McpSettings)
 
     @classmethod
     def load(cls, path: str | Path) -> "AppConfig":

@@ -42,10 +42,19 @@ class AgentTUI(App):
         Binding("escape", "interrupt", "中断", show=False),
     ]
 
-    def __init__(self, agent, config_path: Path | None = None, **kwargs) -> None:
+    def __init__(
+        self,
+        agent,
+        config_path: Path | None = None,
+        skills=None,
+        mcp=None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
         self._agent = agent
         self._config_path = config_path
+        self._skills = skills
+        self._mcp = mcp
         self._busy = False
         self._session_id = uuid.uuid4().hex[:8]
         self._rounds = 0
@@ -80,10 +89,11 @@ class AgentTUI(App):
     def _refresh_topbar(self) -> None:
         names = getattr(self._agent, "tool_names", [])
         model = self._model_name()
+        skill_count = len(self._skills) if self._skills else 0
         brand = "[#f0f6fc][b]wAgent[/b][/]"
         bar = self.query_one("#topbar", Static)
         bar.update(
-            f"{brand}  ·  {len(names)} 个工具  ·  {model}\n"
+            f"{brand}  ·  {len(names)} 个工具  ·  {skill_count} 个技能  ·  {model}\n"
             f"[#6e7681]工作目录[/]  {self._workdir()}\n"
             f"[#6e7681]Enter 发送    /help 命令    Esc 中断生成    Ctrl+B 侧栏    Ctrl+N 新会话[/]"
         )
@@ -114,9 +124,38 @@ class AgentTUI(App):
             状态="就绪" if not self._busy else "生成中",
         )
         sidebar.update_tools(getattr(self._agent, "tool_specs", []))
+        sidebar.update_skills(self._skill_specs())
+        sidebar.update_mcp(self._mcp_status())
+
+    def _skill_specs(self) -> list[dict[str, str]]:
+        if not self._skills:
+            return []
+        specs = getattr(self._skills, "specs", None)
+        return specs() if callable(specs) else []
+
+    def _mcp_status(self) -> list[dict[str, object]]:
+        """MCP 服务器状态，供侧栏渲染。"""
+        if not self._mcp:
+            return []
+        rows: list[dict[str, object]] = []
+        for status in getattr(self._mcp, "statuses", []):
+            rows.append(
+                {
+                    "name": status.name,
+                    "connected": status.connected,
+                    "tool_count": status.tool_count,
+                    "error": status.error,
+                }
+            )
+        return rows
 
     def _max_rounds(self) -> int:
-        return getattr(getattr(self._agent, "_settings", None), "max_tool_rounds", 5)
+        """每轮允许调用模型的总次数。
+
+        引擎按「工具轮数 + 1」循环，故总次数 = max_tool_rounds + 1。
+        """
+        tool_rounds = getattr(getattr(self._agent, "_settings", None), "max_tool_rounds", 5)
+        return tool_rounds + 1
 
     # ------------------------------------------------------------------ 状态栏
     def _refresh_status(self) -> None:
@@ -165,6 +204,8 @@ class AgentTUI(App):
             self.action_new_session()
         elif cmd == "/tools":
             self._show_tools()
+        elif cmd == "/skills":
+            self._show_skills()
         elif cmd == "/cwd":
             self._chat_notice(f"工作目录：{self._workdir()}")
         elif cmd == "/model":
@@ -180,6 +221,26 @@ class AgentTUI(App):
         lines = [f"已注册 {len(specs)} 个工具："]
         for i, item in enumerate(specs, 1):
             lines.append(f"{i}. {item['name']} — {item['description']}")
+        self._chat_notice("\n".join(lines))
+
+    def _show_skills(self) -> None:
+        """列出已发现的 Skill（仅元信息，不含正文）。"""
+        specs = self._skill_specs()
+        if not specs:
+            root = getattr(self._skills, "root", None)
+            where = f"{root / '.agents' / 'skills'}" if root else ".agents/skills"
+            self._chat_notice(f"未发现任何技能。\n扫描目录：{where}")
+            return
+
+        lines = [f"已发现 {len(specs)} 个技能（仅加载名称与描述）："]
+        for i, item in enumerate(specs, 1):
+            lines.append(f"{i}. {item['name']} — {item['description']}")
+
+        errors = getattr(self._skills, "errors", [])
+        if errors:
+            lines.append("")
+            lines.append("以下目录加载失败：")
+            lines.extend(f"- {err}" for err in errors)
         self._chat_notice("\n".join(lines))
 
     def _chat_notice(self, text: str) -> None:

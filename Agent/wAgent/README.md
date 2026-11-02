@@ -12,7 +12,7 @@
 wAgent/
 ├── config.ini              # LLM + 搜索配置（含 Key，已被 .gitignore 排除）
 ├── requirements.txt
-├── wAgent.py               # TUI 启动入口
+├── main.py                 # TUI 启动入口（含 Skill 扫描）
 ├── pytest.ini
 │
 ├── core/                   # ★ 业务内核：与界面零耦合
@@ -24,11 +24,25 @@ wAgent/
 │   │   └── engine.py       #   对话循环、工具编排、消息管理
 │   ├── llm/
 │   │   └── client.py       #   LLMClient 抽象 + OpenAI 实现
+│   ├── skills/             # ★ Agent Skills 发现与注册
+│   │   ├── models.py       #   Skill / SkillLoadError
+│   │   ├── loader.py       #   frontmatter 解析 + 目录扫描 + 正文加载
+│   │   ├── prompt.py       #   技能清单 → System Prompt 片段
+│   │   └── registry.py     #   SkillRegistry
+│   ├── mcp/                # ★ MCP 客户端
+│   │   ├── config.py       #   .mcp.json 解析
+│   │   ├── client.py       #   后台事件循环 + Server 长连接
+│   │   ├── manager.py      #   连接管理 / 工具发现 / 命名冲突
+│   │   ├── tools.py        #   MCP 工具 → 本地 Tool 包装
+│   │   └── prompt.py       #   MCP 状态 → System Prompt 片段
 │   └── tools/
 │       ├── base.py         #   Tool 抽象 + ToolRegistry
 │       ├── builtin.py      #   getDate 工具
 │       ├── search.py       #   searchWeb 联网搜索工具
 │       ├── fetch.py        #   fetchWeb 网页正文抓取工具
+│       ├── filesystem.py   #   9 个文件系统工具
+│       ├── skill.py        #   loadSkill 按需加载技能正文
+│       ├── create_skill.py #   createSkill 新建技能
 │       └── cli.py          #   RunCli 本地命令执行工具
 │
 ├── tui/                    # ★ Textual 界面：只消费事件
@@ -41,7 +55,7 @@ wAgent/
 │   └── widgets/
 │       ├── message.py      #   用户 / 助手 / 错误 气泡
 │       ├── tool_card.py    #   可折叠工具卡片（参数 + 结果 + 耗时）
-│       ├── sidebar.py      #   右侧栏（会话信息 + 工具清单）
+│       ├── sidebar.py      #   右侧栏（会话 / 工具 / 技能）
 │       └── status_bar.py   #   底部状态栏（轮次 / 工具次数 / 耗时）
 │
 └── tests/
@@ -50,6 +64,13 @@ wAgent/
     ├── test_fetch.py       # fetchWeb 工具测试（模拟 curl，离线）
     ├── test_cli.py         # RunCli 工具测试（真实轻量命令）
     ├── test_filesystem.py  # 9 个文件系统工具测试（tmp_path 隔离）
+    ├── test_skills.py      # Skill 发现与注册测试
+    ├── test_skill_prompt.py # Skill 注入 Prompt 与 loadSkill 测试
+    ├── test_skill_files.py  # loadSkill 的 filename 解析测试
+    ├── test_skill_integration.py # 动态加载原则 + 工具协同
+    ├── test_create_skill.py # createSkill 工具测试
+    ├── test_mcp.py         # MCP 客户端测试（含真实连接）
+    ├── test_main_config.py # 启动配置测试
     └── test_tui.py         # TUI 无头测试
 ```
 
@@ -393,8 +414,423 @@ python wAgent.py
 
 ```powershell
 python -m pytest -q
-# 17 passed
+# 139 passed
 ```
+
+---
+
+## Agent Skills
+
+按 [Agent Skills](https://agentskills.io) 规范加载本地技能。启动时以**当前工作目录**为项目根：
+
+```
+<项目根>/.agents/skills/<skill-name>/SKILL.md
+```
+
+### SKILL.md 格式
+
+```markdown
+---
+name: 撰写通知
+description: 撰写公司内部通知
+---
+
+1. 标题必须包含部门名称……
+```
+
+- `name`、`description` 为**必需字段**，缺失或为空会跳过该 Skill
+- 其余字段（`version`、`layout` 等）原样保留在 `Skill.extra`，不影响加载
+- `description` 支持 YAML 块标量（`|`），多行会被压平显示
+
+### 只读元信息
+
+按规范要求，**初始化阶段只读取 frontmatter**。实现上 `read_frontmatter()`
+逐行扫描到结束 `---` 就停止，**正文根本不会被读入内存**——
+即使正文是非法内容也不影响加载（`test_body_is_not_read` 专门验证这一点）。
+
+### 容错
+
+- `.agents/skills` 不存在 → 返回空列表，不影响启动
+- 单个 Skill 损坏 → 记录到 `registry.errors` 并跳过，其余照常加载
+- 两个 Skill 同名 → 保留目录名排序靠前者，另一个记为冲突
+
+启动时会把跳过的 Skill 打印到 stderr；TUI 里可用 `/skills` 查看。
+
+### 注入 System Prompt
+
+启动时把技能清单拼到 System Prompt 末尾，让模型知道有哪些技能、怎么按需加载：
+
+```
+You have access to the following skills:
+- 'fortune-daily': 每日综合运势预测技能 — 融合西方星座 + 中国生肖…
+- '撰写通知': 撰写公司内部通知
+
+Use the 'loadSkill' tool to load the full instructions of a skill when needed.
+You can also load additional files referenced by a skill.
+Only load a skill when it is relevant to the current task; do not load every skill up front.
+Skills work alongside your other tools: use the regular tools for files, commands and web
+access, and load a skill only for its task-specific guidance.
+```
+
+要点：
+
+- **只放名称与描述**，正文不进 Prompt，避免常驻 token 开销
+- 描述压平成单行，多行 YAML 块标量不会把清单撑开
+- **没有技能时整段不注入**，Prompt 保持原样
+- 技能段在 `Agent.reset()` 后仍然保留
+
+### 动态加载原则
+
+**Skill 正文只在模型调用 `loadSkill` 时才进入对话上下文。** 具体保证：
+
+| 阶段 | 上下文里有什么 |
+|------|----------------|
+| 启动后 | System Prompt 只有 `name` + `description` |
+| 模型请求第 1 次 | 仍只有元信息，含正文的技能段不存在 |
+| 调用 `loadSkill` 后 | 正文作为 **`tool` 消息**进入，模型下一次请求才能看到 |
+
+这条由测试锁定（`test_body_absent_before_load_skill` /
+`test_model_sees_body_on_next_turn`）：断言的是一段独有的正文标记
+`SECRET-SKILL-BODY-9f3a` 在加载前后是否出现在上下文里。
+
+### 与已有工具协同
+
+Skill **不改变 Agent 的工作流**：`loadSkill` 只是一个普通 Tool，
+和 `RunCli`、`readFile`、`listDir` 走同一条 `registry.execute()` 通道。
+
+- Agent 引擎里**没有**任何 `skill` 相关的特殊分支
+- 轮次上限、工具结果回填、失败回滚、消息历史结构全部沿用原逻辑
+- 同一轮内可以混用：先 `listDir` 再看目录、再 `loadSkill` 取技能说明
+
+实测（一次对话里文件工具与技能工具并用）：
+
+```
+[调用 listDir]  {'path': '.agents/skills'}
+  → 目录：D:\office\.agents\skills（共 2 项） [目录] fortune-daily-1.0.1/ [目录] notice/
+[调用 loadSkill] {'name': '撰写通知'}
+  → 技能「撰写通知」的完整说明：1. 标题必须加入部门名称…… 2. 落款必须写明起草人……
+
+历史角色: system, user, assistant, tool, assistant, tool, assistant
+```
+
+消息角色序列就是标准的工具调用循环，与引入 Skill 之前完全一致。
+
+### loadSkill 工具
+
+模型判断某个技能与当前任务相关时，主动调用：
+
+```json
+{"name": "撰写通知"}
+{"name": "fortune-daily", "filename": "MEMORY.md"}
+```
+
+| 参数 | 必填 | 说明 |
+|------|:----:|------|
+| `name` | ✅ | 技能名，须与 Prompt 中列出的一致 |
+| `filename` | ❌ | 技能内的文件，支持多种写法（见下） |
+
+#### 两种模式
+
+| 传参 | 行为 |
+|------|------|
+| 只传 `name` | 读取该技能 `SKILL.md` **全文** |
+| 同时传 `filename` | **只读该附加文件**，不重复加载 `SKILL.md` |
+
+#### filename 的解析顺序
+
+先精确、后模糊，任何一步逃出技能目录都会被拒绝：
+
+| 顺序 | 写法 | 示例 |
+|:----:|------|------|
+| 1 | 绝对路径 | `D:\office\.agents\skills\demo\references\guide.md` |
+| 2 | 相对技能目录 | `references/guide.md` |
+| 3 | 相对项目根 | `.agents/skills/demo/references/guide.md` |
+| 4 | **只给文件名** | `guide.md` → 在技能目录内递归搜索 |
+
+第 4 种情况：
+
+- **唯一命中** → 直接读取，并返回相对路径（如 `references/guide.md`）
+- **多个同名文件** → 不擅自选择，返回候选清单让模型决定：
+
+```
+技能「demo」目录中有多个名为「dup.md」的文件，请用 filename 参数指定要读取的路径：
+- references/dup.md
+- scripts/dup.md
+```
+
+#### 安全边界
+
+- 读取范围**严格限制在该技能目录内**，`../` 穿越、绝对路径指向外部、
+  读同级其他技能的文件，全部拒绝
+- 传了目录时列出其中文件，便于模型自行纠正
+- 技能名不存在时列出全部可用技能
+- 单文件返回上限 10 万字符，超出会标注截断
+
+**没有技能时不注册此工具**，避免 Prompt 指向不存在的实现。
+
+#### 实测
+
+```json
+[调用 loadSkill] {'name': 'fortune-daily'}
+  → 返回 SKILL.md 全文
+
+[调用 loadSkill] {'name': 'fortune-daily', 'filename': 'zodiac-index.md'}
+  → 技能「fortune-daily」的文件 references/zodiac-index.md：
+    # 十二星座快速索引 ...          ← 只给文件名，递归命中
+```
+
+模型加载技能正文后**遵守了其中的规则**：
+
+```
+用户: 帮我写一份关于下周停电的通知
+[调用 loadSkill] {'name': '撰写通知'}
+[调用 getDate] {}
+→ 通知草稿我来写，但有两项关键信息需要先确认：
+  1. 起草人姓名  2. 发布部门
+```
+
+技能正文要求「标题必须含部门名称、落款必须有起草人姓名、不清楚时必须先询问」——
+模型加载后严格照做。
+
+### createSkill 工具
+
+根据用户的自然语言要求，现场生成一个新技能。
+
+```json
+{
+  "name": "weekly-report",
+  "skillContext": "用于撰写结构化周报\n\n## 工作流程\n1. 收集本周完成事项…"
+}
+```
+
+| 参数 | 必填 | 说明 |
+|------|:----:|------|
+| `name` | ✅ | 技能名，自动规范为 kebab-case，并作为目录名 |
+| `skillContext` | ✅ | 写入 SKILL.md 的完整内容 |
+
+#### skillContext 怎么拆
+
+约定很简单：**第一行非空文本作为 `description`，其余作为正文**。
+
+```
+用于撰写结构化周报          ← description
+                            ← 空行
+## 工作流程                 ← 以下是正文
+1. 收集本周完成事项…
+```
+
+如果 `skillContext` 自带完整的 YAML frontmatter，则直接沿用其中的 `description`。
+
+#### 生成结果
+
+```
+<项目根>/.agents/skills/weekly-report/SKILL.md
+```
+
+```markdown
+---
+name: weekly-report
+description: '用于撰写结构化周报…'
+---
+
+## 工作流程
+1. 收集本周完成事项…
+```
+
+- 目录名与 frontmatter 的 `name` **始终一致**
+- `description` 用 YAML 单引号标量，内部单引号自动双写转义
+- 生成后会**重新解析一遍**做自校验，不通过则报错
+
+#### 名称规范
+
+| 输入 | 结果 | 说明 |
+|------|------|------|
+| `PDF Summary` | `pdf-summary` | 转小写、空格转连字符 |
+| `doc_writer` | `doc-writer` | 下划线转连字符 |
+| `a--b` | `a-b` | 压缩连续连字符 |
+| `--x--` | `x` | 去掉首尾连字符 |
+| `PDF摘要` | ❌ 拒绝 | 含非英文字符 |
+
+**非英文名被直接拒绝**，而不是裁剪成残名。`PDF摘要` 若裁剪会得到 `pdf`，
+丢失关键信息。工具会提示改用 `'pdf-summary'` 这类英文名。
+
+其余约束：最长 64 字符、不许首尾连字符、不许连续连字符、`description` 不许含 `< >`。
+
+#### 拒绝覆盖
+
+目标已存在时立即中止，原文件一字不动：
+
+```
+创建失败：技能「doc-writer」已存在（…），为避免覆盖原有内容已中止。
+如需修改，请先用 readFile 查看现有 SKILL.md，再用 editFile 更新；或换一个名称。
+```
+
+规范化后撞名也算已存在（`PDF Summary` → `pdf-summary` 与已有的同名）。
+
+#### 辅助文件交给 fileops 工具
+
+`createSkill` **只生成 SKILL.md + 目录本身**。需要 `references/`、`scripts/`
+等辅助结构时，由模型继续调用已有工具：
+
+```
+[createSkill] 创建 weekly-report
+[createDir]   创建 .agents/skills/weekly-report/references
+[createFile]  创建 references/template.md
+```
+
+这样职责单一：一个工具只做一件事，组合由模型完成。
+
+#### 实测
+
+```
+用户: 帮我创建一个叫 'weekly-report' 的技能，用于写周报。
+      要求：先收集本周完成的事项，按「完成/进行中/风险」三类整理，最后给出下周计划。
+
+[调用 createSkill] 创建成功
+→ 已创建技能「weekly-report」
+
+磁盘验证：.agents/skills/weekly-report/SKILL.md 存在，frontmatter 规范
+重新扫描：技能 = ['weekly-report']
+```
+
+模型生成的正文里还主动写明了「可调用 getDate 确认日期、listDir / readFile 读取素材」，
+说明它理解了技能与其他工具的分工。
+
+> 创建成功后新技能会**立即注册到当前会话**，可以直接用
+> `loadSkill(name='...')` 加载，不需要重启 wAgent。
+> 若原本一个技能都没有，`loadSkill` 也会在此时被动态补注册。
+
+### 在界面里查看
+
+- 顶栏显示 `N 个技能`
+- 侧栏「技能 · N」区块列出名称与描述
+- `/skills` 命令输出完整清单（含加载失败原因）
+
+### 代码位置
+
+| 文件 | 职责 |
+|------|------|
+| `core/skills/models.py` | `Skill` / `SkillLoadError` 数据模型 |
+| `core/skills/loader.py` | frontmatter 解析、目录扫描、正文与引用文件加载 |
+| `core/skills/prompt.py` | 技能清单 → System Prompt 片段 |
+| `core/skills/registry.py` | `SkillRegistry` 注册表 |
+| `core/tools/skill.py` | `loadSkill` 工具 |
+| `main.py` | `load_skills()`：以 cwd 为项目根发起扫描 |
+
+---
+
+## MCP Client
+
+wAgent 可以连接外部 MCP Server，把它们提供的工具当作本地工具一样调用。
+
+### 配置文件
+
+位置：**项目根**（程序启动时的当前工作目录）下的 `.mcp.json`，
+不是 wAgent 的源代码目录——这样同一份代码能在不同项目里连不同的 Server。
+
+```json
+{
+  "mcpServers": {
+    "pet-hospital": {
+      "type": "streamableHttp",
+      "url": "http://127.0.0.1:8090/mcp"
+    }
+  }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `type` | `streamableHttp`（本版本仅支持这个） |
+| `url` | MCP 端点地址 |
+| `headers` | 可选，附加 HTTP 头（如 `Authorization`） |
+
+### 工作流程
+
+```
+启动 → 读 .mcp.json → 逐个连接 → list_tools() → 包装成 Tool → 注册进 ToolRegistry
+                                                                    ↓
+                                                       与本地工具同一条 Function Calling 通道
+```
+
+### 工具命名与冲突
+
+暴露给 LLM 的工具名默认与 MCP Server 中的原名一致。**只有出现跨服务器重名时**
+才会加 `服务器名__` 前缀：
+
+```
+Server A: list_pets  ──┐
+                        ├─→ A__list_pets / B__list_pets
+Server B: list_pets  ──┘
+
+Server C: search_docs ──→ search_docs   （无冲突，保持原名）
+```
+
+内部维护 `暴露名 → (服务器, 原始工具名)` 映射，调用时据此转发。
+
+若 MCP 工具与**本地工具**重名，保留本地实现，跳过 MCP 版本。
+
+### 结果处理
+
+MCP 返回值有三种形态，统一整理后交给 LLM：
+
+| 情况 | 处理 |
+|------|------|
+| 只有文本 | 直接返回文本 |
+| 有 `structuredContent` | 优先返回 JSON，文本作为补充说明 |
+| `isError` 或结构化结果含 `error` | 返回 `MCP 工具调用失败：<原因>` |
+
+### 容错
+
+- **Server 连不上**：记录到 `statuses`，打印到 stderr，**其他工具照常工作**
+- **`.mcp.json` 格式错**：记为 issue，启动继续；单个 Server 配置非法只跳过该条
+- **调用超时/异常**：返回可读错误文本，Agent 循环不中断
+- **没有 `.mcp.json`**：静默跳过，一切如常
+
+连不上时 System Prompt 会明确告知模型：
+
+```
+The following MCP servers are currently unreachable:
+- pet-hospital (http://127.0.0.1:8090/mcp): 连接被拒绝…
+If the user asks for one of those tools, explain that the MCP server is not available…
+```
+
+### 前端无关
+
+`core/mcp/` 不依赖任何 UI。`main.py` 负责：
+
+```python
+mcp = load_mcp()                     # 以 cwd 为项目根连接
+agent = build_agent(mcp=mcp, ...)    # 工具注册进同一个 ToolRegistry
+AgentTUI(agent, skills=skills, mcp=mcp).run()
+```
+
+TUI 侧栏会显示 `MCP · 1/1` 与每个 Server 的工具数；未连接时显示红点与错误原因。
+
+### 实测
+
+```
+[MCP] pet-hospital: 已连接（1 个工具）
+工具总数: 16  （15 个本地 + 1 个 MCP）
+
+用户: 帮我查一下当前住院中的宠物有哪些，另外告诉我今天日期
+
+[调用 getDate] {}                       ← 本地工具
+  → 周一 2026/11/02  11:23
+[调用 list_pets] {'status': '住院中'}    ← MCP 工具
+  → { "items": [ { "name": "咪咪", ... } ] }
+
+→ 模型把两者合成一个回答
+```
+
+### 技术要点
+
+Agent 循环是**同步生成器**，而 MCP Python SDK 是异步的。`client.py` 在后台线程
+跑独立事件循环，用 `run_coroutine_threadsafe` 把异步调用桥接成同步调用，
+因此 core 其余部分无需改为 async。
+
+> anyio 会把真实错误包在 `ExceptionGroup` 里，代码递归取出最内层原因，
+> 否则用户只会看到「unhandled errors in a TaskGroup」这种无用信息。
 
 ---
 

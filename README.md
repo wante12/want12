@@ -8,19 +8,54 @@ D:\LLM-Course\
 ├── PetHospitalMCP\        任务一：宠物医院 MCP（list_pets）
 ├── AnythingLLMMCP\        任务二：AnythingLLM MCP（读第一个工作区文件）
 ├── AnythingLLMWebPage\    任务三：上传网页（上传 + 嵌入）
-├── Agent\                 Agent 练习（Practice01 / Practice02）
-└── Playground\            两个 MCP 的客户端配置文件
+├── Agent\                 Agent 练习（wAgent 等）
+├── BaziMCP\               八字 MCP（bazi-mcp 的 HTTP 托管）
+├── Playground\            MCP 客户端配置文件
+└── start-all.bat          ★ 一键启动全部服务
 ```
 
 | # | 内容 | 目录 | 工具 / 形式 | 端口 |
 |:-:|------|------|-------------|:----:|
-| 1 | 宠物医院 MCP | `PetHospitalMCP\` | 工具 `list_pets` | 8091 |
-| 2 | AnythingLLM MCP | `AnythingLLMMCP\` | 工具 `list_workspace_files` | 8093 |
-| 3 | 上传网页 | `AnythingLLMWebPage\` | `index.html` | — |
-| — | Agent 练习 | `Agent\` | 命令行聊天 / 工具调用 | — |
+| 1 | 宠物医院 REST | `PetHospitalServer\` | 网页 + 数据源 | 8080 |
+| 2 | 宠物医院 MCP | `PetHospitalMCP\` | 工具 `list_pets` | 8090 |
+| 3 | 八字 MCP | `BaziMCP\` | 3 个八字工具 | 8095 |
+| 4 | AnythingLLM MCP | `AnythingLLMMCP\` | 工具 `list_workspace_files` | 8093 |
+| 5 | 上传网页 | `AnythingLLMWebPage\` | `index.html` | — |
+| — | Agent | `Agent\wAgent\` | TUI + 本地工具 + MCP 客户端 | — |
 
-两个 MCP 都是 **Streamable HTTP，无握手、无会话、无长连接**，
+两个宠物医院相关的 MCP 都是 **Streamable HTTP，无握手、无会话、无长连接**，
 同时兼容 **2026-07-28 之前（旧版 initialize）和之后（单次 POST + `_meta`）** 两套协议。
+
+---
+
+## 一键启动
+
+双击 **`start-all.bat`**，会依次拉起三个服务（每个开独立窗口）：
+
+| 脚本 | 服务 | 端口 |
+|------|------|:----:|
+| `start-rest.bat` | 宠物医院 REST 后端 | 8080 |
+| `start-mcp-pet.bat` | 宠物医院 MCP Server | 8090 |
+| `start-mcp-bazi.bat` | 八字 MCP Server | 8095 |
+
+启动顺序有依赖：**REST 必须在 MCP 之前就绪**（脚本已处理 4 秒间隔）。
+
+服务都起来后启动 wAgent：
+
+```powershell
+cd D:\office
+python D:\LLM-Course\Agent\wAgent\main.py
+```
+
+三者关闭窗口即停止。端口自查：
+
+```powershell
+foreach ($p in 8080,8090,8095) {
+  "$p : " + $(if (Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue) {'OK'} else {'DOWN'})
+}
+```
+
+> `.bat` 里全部使用英文：中文批处理在 `chcp 65001` 下容易解析出错，这是实测踩过的坑。
 
 ---
 

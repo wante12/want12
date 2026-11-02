@@ -1,0 +1,9 @@
+﻿{
+  "name": "bazi-mcp-host",
+  "private": true,
+  "version": "1.0.0",
+  "description": "本地托管 bazi-mcp 的 HTTP 服务（供 wAgent 通过 MCP 接入）",
+  "dependencies": {
+    "bazi-mcp": "0.1.0"
+  }
+}

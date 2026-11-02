@@ -22,6 +22,13 @@ Agent/wAgent/Mermaid.mmd
 PetHospitalServer/pethospital.exe
 PetHospitalServer/data/
 
+# Node 依赖（bazi-mcp 约 34MB）
+BaziMCP/node_modules/
+package-lock.json
+
+# MCP 本地配置（含本机端口/路径，因人而异）
+.mcp.json
+
 # 编辑器
 .vscode/
 .idea/
