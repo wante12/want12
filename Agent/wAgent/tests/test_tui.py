@@ -149,7 +149,9 @@ async def test_tool_card_created_and_finished():
         assert card.tool_name == "echo"
         assert not card.has_class("running")          # 已完成
         assert "echo:x" in str(card._result_body.render())
-        assert "ms" in card._collapsible.title
+        # title 现在是 Content 对象（避免 markup 解析），取 plain 再比较
+        title = card._collapsible.title
+        assert "ms" in (title.plain if hasattr(title, "plain") else str(title))
 
 
 # ---------------------------------------------------------------- 状态

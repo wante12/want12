@@ -10,13 +10,20 @@ class StatusBar(Static):
     """单行状态提示，界面底部。"""
 
     def __init__(self, **kwargs) -> None:
-        super().__init__(id="statusbar", **kwargs)
+        # 初始必须有文本：Static.render() 返回 None 会让 Textual 计算尺寸时崩溃
+        super().__init__("就绪", id="statusbar", **kwargs)
         self._status = "就绪"
         self._style = "ok"
         self._rounds = 0
         self._tools = 0
         self._elapsed = ""
         self._model = ""
+        self.refresh_text()
+
+    def render(self):
+        """确保永远返回非 None。"""
+        visual = super().render()
+        return visual if visual is not None else ""
 
     # ---------------------------------------------------------------- 设置
     def configure(self, model: str) -> None:

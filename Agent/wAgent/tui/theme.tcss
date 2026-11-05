@@ -22,6 +22,22 @@ Screen {
     text-style: bold;
 }
 
+/* ---------------------------------------------------------------- 上下文计量 */
+/* 注意：height 必须大于 padding+border 占用的行数，否则内容区被压成 0 行而看不见 */
+#ctx-meter {
+    height: 3;
+    padding: 0 2 1 2;
+    background: #010409;
+    border-bottom: solid #21262d;
+    color: #58a6ff;
+}
+
+#ctx-meter.idle { color: #6e7681; }
+#ctx-meter.ok { color: #58a6ff; }
+#ctx-meter.warn { color: #d29922; text-style: bold; }
+#ctx-meter.danger { color: #f85149; text-style: bold; }
+#ctx-meter.busy { color: #d29922; text-style: bold; }
+
 /* ---------------------------------------------------------------- 主区域 */
 #main {
     height: 1fr;

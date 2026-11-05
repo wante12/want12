@@ -34,14 +34,22 @@ class Agent:
         client: LLMClient,
         registry: ToolRegistry,
         system_prompt_extra: str = "",
+        model_name: str = "",
+        context_settings=None,
     ) -> None:
         self._settings = settings
         self._client = client
         self._registry = registry
+        self._model_name = model_name
+        self._context_settings = context_settings
         self._system_prompt = self._compose(settings.system_prompt, system_prompt_extra)
         self._messages: list[dict[str, Any]] = [
             {"role": "system", "content": self._system_prompt}
         ]
+        #: 上一次 API 返回的 prompt_tokens（最准确的用量来源）
+        self._last_prompt_tokens: int | None = None
+        #: 压缩期间置为 True：禁止执行工具、禁止处理新任务
+        self._compacting = False
 
     @staticmethod
     def _compose(base: str, extra: str) -> str:
@@ -73,9 +81,82 @@ class Agent:
             for item in self._registry.schemas()
         ]
 
+    @property
+    def tool_schemas(self) -> list[dict[str, Any]]:
+        """工具定义原文，用于计算上下文占用。"""
+        return self._registry.schemas()
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    @property
+    def is_compacting(self) -> bool:
+        return self._compacting
+
+    def context_usage(self) -> "ContextUsage":
+        """当前上下文的 token 用量快照。阈值与默认窗口来自配置。"""
+        from ..context import ContextUsage
+
+        settings = self._context_settings
+        return ContextUsage.compute(
+            self._messages,
+            self.tool_schemas,
+            self._model_name,
+            api_prompt_tokens=self._last_prompt_tokens,
+            default_window=getattr(settings, "default_window", None),
+            warn_ratio=getattr(settings, "warn_ratio", None),
+            danger_ratio=getattr(settings, "danger_ratio", None),
+        )
+
+    def set_compacting(self, value: bool) -> None:
+        """由 UI 在压缩开始/结束时调用。"""
+        self._compacting = bool(value)
+
+    def replace_context(self, messages: list[dict[str, Any]]) -> None:
+        """用压缩后的消息列表替换当前上下文。
+
+        System Prompt 始终保留**当前 Agent 自己的**版本——
+        即使传入的列表里带了别的 system 消息，也不会覆盖，
+        这样技能清单、MCP 说明等基本能力不受压缩影响。
+        """
+        rest = [m for m in messages if m.get("role") != "system"]
+        self._messages = [{"role": "system", "content": self._system_prompt}] + rest
+        self._last_prompt_tokens = None  # 旧用量已失效
+
+    def append_message(self, message: dict[str, Any]) -> None:
+        """向历史追加一条消息（用于 AGENTS.md 注入、恢复会话等）。"""
+        if message:
+            self._messages.append(dict(message))
+            self._last_prompt_tokens = None
+
+    def register_tools(self, tools: list[Any]) -> list[str]:
+        """运行时注册新工具（MCP 异步加载后调用）。
+
+        返回实际注册成功的工具名；重名的跳过，保证本地工具优先。
+        """
+        added: list[str] = []
+        for tool in tools or []:
+            name = getattr(tool, "name", "")
+            if not name or name in self._registry.names:
+                continue
+            try:
+                self._registry.register(tool)
+                added.append(name)
+            except Exception:  # noqa: BLE001 单个工具失败不影响其余
+                continue
+        if added:
+            self._last_prompt_tokens = None
+        return added
+
+    def set_messages(self, messages: list[dict[str, Any]]) -> None:
+        """直接设置历史（保留 System Prompt）。等价于 replace_context。"""
+        self.replace_context(messages)
+
     def reset(self) -> None:
         """清空对话，保留 system prompt（含技能清单）。"""
         self._messages = [{"role": "system", "content": self._system_prompt}]
+        self._last_prompt_tokens = None
 
     # ------------------------------------------------------------------ 主流程
     def stream_reply(self, user_prompt: str) -> Iterator[AgentEvent]:
@@ -83,6 +164,9 @@ class Agent:
 
         失败或中断时回滚本轮消息，保证上下文干净（与原实现一致）。
         """
+        if self._compacting:
+            raise RuntimeError("正在压缩上下文，暂不接受新任务。请等待压缩完成。")
+
         start_len = len(self._messages)
         self._messages.append({"role": "user", "content": user_prompt})
         yield AgentEvent(EventType.ROUND_STARTED, {"prompt": user_prompt})
@@ -110,12 +194,17 @@ class Agent:
                     continue
 
                 self._messages.append({"role": "assistant", "content": content})
+                usage = self.context_usage()
                 yield AgentEvent(
                     EventType.ROUND_FINISHED,
                     {
                         "content": content,
                         "duration_ms": round((time.perf_counter() - round_started) * 1000, 1),
                         "tool_calls": tool_calls_made,
+                        "context_used": usage.used,
+                        "context_window": usage.window,
+                        "context_percent": round(usage.percent, 1),
+                        "context_warn": usage.needs_compact,
                     },
                 )
                 return
@@ -139,6 +228,11 @@ class Agent:
                 events.append(AgentEvent(EventType.TEXT_DELTA, {"text": chunk.text}))
             if chunk.tool_calls:
                 call_deltas.extend(chunk.tool_calls)
+            # 流末尾可能带 usage，记下来作为上下文占用
+            if getattr(chunk, "usage", None) is not None:
+                prompt_tokens = getattr(chunk.usage, "prompt_tokens", 0) or 0
+                if prompt_tokens > 0:
+                    self._last_prompt_tokens = prompt_tokens
 
         return "".join(text_parts), merge_tool_calls(call_deltas), events
 
@@ -146,6 +240,10 @@ class Agent:
         """依次执行工具，并把结果作为 tool 消息回填。"""
         import json
         import time
+
+        if self._compacting:
+            # 压缩期间禁止任何工具执行
+            return
 
         for tc in tool_calls:
             try:

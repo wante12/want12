@@ -34,11 +34,24 @@ class ToolCallDelta:
 
 
 @dataclass
+class Usage:
+    """一次请求的 token 用量（来自模型 API）。"""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
+@dataclass
 class StreamChunk:
-    """一次流式增量：可能只有文本，也可能带工具调用分片。"""
+    """一次流式增量：可能只有文本，也可能带工具调用分片。
+
+    usage 只在流结束时出现（OpenAI 兼容接口把它放在最后一个 chunk 里）。
+    """
 
     text: str = ""
     tool_calls: list[ToolCallDelta] = field(default_factory=list)
+    usage: Usage | None = None
 
 
 class LLMClient(ABC):
@@ -51,6 +64,17 @@ class LLMClient(ABC):
         tools: list[dict[str, Any]] | None = None,
     ) -> Iterator[StreamChunk]:
         """流式请求模型，逐块产出 StreamChunk。"""
+
+    def complete(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """非流式地拿到完整回复（供上下文压缩使用）。
+
+        默认实现基于 stream() 拼装，子类可覆盖。
+        """
+        return "".join(chunk.text for chunk in self.stream(messages, tools))
 
 
 class OpenAICompatClient(LLMClient):
@@ -69,6 +93,10 @@ class OpenAICompatClient(LLMClient):
             timeout=timeout,
         )
 
+    @property
+    def model(self) -> str:
+        return self._model
+
     def stream(
         self,
         messages: list[dict[str, Any]],
@@ -78,6 +106,8 @@ class OpenAICompatClient(LLMClient):
             "model": self._model,
             "messages": messages,
             "stream": True,
+            # 让服务端在流末尾附带 usage，用于上下文监控
+            "stream_options": {"include_usage": True},
         }
         if tools:
             kwargs["tools"] = tools
@@ -86,8 +116,21 @@ class OpenAICompatClient(LLMClient):
         stream = self._client.chat.completions.create(**kwargs)
 
         for chunk in stream:
+            raw_usage = getattr(chunk, "usage", None)
+            usage = None
+            if raw_usage is not None:
+                usage = Usage(
+                    prompt_tokens=int(getattr(raw_usage, "prompt_tokens", 0) or 0),
+                    completion_tokens=int(getattr(raw_usage, "completion_tokens", 0) or 0),
+                    total_tokens=int(getattr(raw_usage, "total_tokens", 0) or 0),
+                )
+
             if not chunk.choices:
+                # 只带 usage 的结尾块
+                if usage is not None:
+                    yield StreamChunk(usage=usage)
                 continue
+
             delta = chunk.choices[0].delta
 
             deltas: list[ToolCallDelta] = []
@@ -103,7 +146,7 @@ class OpenAICompatClient(LLMClient):
                     )
                 )
 
-            yield StreamChunk(text=delta.content or "", tool_calls=deltas)
+            yield StreamChunk(text=delta.content or "", tool_calls=deltas, usage=usage)
 
 
 def merge_tool_calls(chunks: list[ToolCallDelta]) -> list[ToolCallDelta]:

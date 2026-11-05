@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-from rich.markup import escape
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Static
@@ -20,8 +19,10 @@ class MessageCard(Vertical):
     def __init__(self, text: str = "", **kwargs) -> None:
         super().__init__(classes=f"msg msg-{self.variant}", **kwargs)
         self._text = text
-        self._role = Static(escape(self.role_label), classes="role", markup=False)
-        self._body = Static(escape(text), classes="msg-body", markup=False)
+        # markup=False 表示按纯文本渲染：不做 markup 解析，
+        # 因此不需要（也不应该）预先 escape，否则会双重转义
+        self._role = Static(self.role_label, classes="role", markup=False)
+        self._body = Static(text, classes="msg-body", markup=False)
 
     def compose(self) -> ComposeResult:
         yield self._role
@@ -30,7 +31,7 @@ class MessageCard(Vertical):
     # -- 供流式更新使用 --
     def set_text(self, text: str) -> None:
         self._text = text
-        self._body.update(escape(text))
+        self._body.update(text)
 
     def append_text(self, piece: str) -> None:
         self.set_text(self._text + piece)

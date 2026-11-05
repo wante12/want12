@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .agent.engine import Agent
 from .config import AppConfig, CliSettings, FetchSettings, FsSettings, SearchSettings
+from .context.recall import build_recall_tool
 from .llm.client import LLMClient, OpenAICompatClient
 from .mcp.manager import McpManager
 from .mcp.prompt import build_mcp_prompt
@@ -38,6 +39,9 @@ def build_registry(
     fs: FsSettings | None = None,
     skills: "SkillRegistry | None" = None,
     mcp: "McpManager | None" = None,
+    project_root: Path | str | None = None,
+    context=None,
+    ui=None,
 ) -> ToolRegistry:
     """构造默认工具集，可追加自定义工具。
 
@@ -45,6 +49,7 @@ def build_registry(
     这样模型能明确知道缺什么，而不是工具凭空消失。
     有技能时才注册 loadSkill，避免 Prompt 里的工具指向空实现。
     mcp 不为空时，把已发现的 MCP 工具一并注册，与本地工具平级。
+    recallContext 始终注册：压缩摘要里可能引用归档，需要能检索。
     """
     registry = ToolRegistry()
     registry.register(GetDateTool())
@@ -60,6 +65,9 @@ def build_registry(
 
     # createSkill 始终注册：即使当前没有技能，也要能创建第一个
     registry.register(build_create_skill_tool(skills, tool_registry=registry))
+
+    # 历史上下文检索
+    registry.register(build_recall_tool(project_root, context))
 
     # MCP 工具：走同一条 Function Calling 通道
     for tool in build_mcp_tools(mcp):
@@ -82,6 +90,7 @@ def build_agent(
     skills: "SkillRegistry | None" = None,
     mcp: "McpManager | None" = None,
     max_tool_rounds: int | None = None,
+    project_root: Path | str | None = None,
 ) -> Agent:
     """组装一个可用的 Agent。
 
@@ -95,15 +104,19 @@ def build_agent(
 
     max_tool_rounds 不为空时覆盖默认的工具轮次上限；
     引擎按「工具轮数 + 1」循环，因此模型调用总次数 = max_tool_rounds + 1。
+
+    project_root 用于定位 .agents/context 归档目录，默认当前工作目录。
     """
     cfg = AppConfig.load(config_path or DEFAULT_CONFIG)
     settings = cfg.agent
     if max_tool_rounds is not None:
         settings = dataclasses.replace(settings, max_tool_rounds=max_tool_rounds)
 
+    llm_client = client or OpenAICompatClient(cfg.llm)
+
     return Agent(
         settings=settings,
-        client=client or OpenAICompatClient(cfg.llm),
+        client=llm_client,
         registry=registry
         or build_registry(
             *extra_tools,
@@ -113,8 +126,13 @@ def build_agent(
             fs=cfg.fs,
             skills=skills,
             mcp=mcp,
+            project_root=project_root,
+            context=cfg.context,
+            ui=cfg.ui,
         ),
         system_prompt_extra=_compose_extra(skills, mcp),
+        model_name=cfg.llm.model,
+        context_settings=cfg.context,
     )
 
 

@@ -35,6 +35,16 @@ wAgent/
 │   │   ├── manager.py      #   连接管理 / 工具发现 / 命名冲突
 │   │   ├── tools.py        #   MCP 工具 → 本地 Tool 包装
 │   │   └── prompt.py       #   MCP 状态 → System Prompt 片段
+│   ├── context/            # ★ 上下文压缩与检索
+│   │   ├── tokens.py       #   Token 估算 + 模型窗口表
+│   │   ├── usage.py        #   用量快照与 70% 阈值
+│   │   ├── archive.py      #   原始上下文归档（JSONL）
+│   │   ├── compactor.py    #   压缩流程 + 专用 Prompt
+│   │   └── recall.py       #   recallContext 检索工具
+│   ├── session/            # ★ 会话持久化
+│   │   ├── store.py        #   会话文件读写（JSONL）
+│   │   ├── agents_md.py    #   AGENTS.md 一次注入
+│   │   └── manager.py      #   SessionManager
 │   └── tools/
 │       ├── base.py         #   Tool 抽象 + ToolRegistry
 │       ├── builtin.py      #   getDate 工具
@@ -70,6 +80,9 @@ wAgent/
     ├── test_skill_integration.py # 动态加载原则 + 工具协同
     ├── test_create_skill.py # createSkill 工具测试
     ├── test_mcp.py         # MCP 客户端测试（含真实连接）
+    ├── test_context.py     # 上下文压缩 / 归档 / 检索
+    ├── test_compact_panel.py # 压缩对比面板
+    ├── test_session.py     # 会话持久化 / AGENTS.md / 命令面板 / MCP 异步
     ├── test_main_config.py # 启动配置测试
     └── test_tui.py         # TUI 无头测试
 ```
@@ -831,6 +844,294 @@ Agent 循环是**同步生成器**，而 MCP Python SDK 是异步的。`client.p
 
 > anyio 会把真实错误包在 `ExceptionGroup` 里，代码递归取出最内层原因，
 > 否则用户只会看到「unhandled errors in a TaskGroup」这种无用信息。
+
+---
+
+## 斜杠命令
+
+按 **F2** 或 **Ctrl+P** 打开补全引导面板（↑↓ 选择、Enter 补全、Esc 取消）。
+
+| 命令 | 作用 |
+|------|------|
+| `/help` | 帮助 |
+| `/new` | 新建会话，**自动保存**当前会话 |
+| `/resume` | 历史会话列表：↑↓ 选择、Enter 恢复、Esc 取消 |
+| `/save [名称]` | 保存当前会话 |
+| `/sessions` | 列出全部历史会话 |
+| `/compact` | 压缩上下文 |
+| `/compact-preview` | 重看上次压缩的前后对比 |
+| `/reset` | 重置上下文（不保存） |
+| `/clear` | 清屏（保留历史） |
+| `/tools` `/skills` `/mcp` | 列出工具 / 技能 / MCP 状态 |
+| `/context` | 上下文用量详情 |
+| `/cwd` `/model` | 工作目录 / 模型与配置 |
+| `/quit` | 退出（先自动保存） |
+
+> 补全面板用**主动唤起**（F2/Ctrl+P）而不是「输入 `/` 自动弹出」。
+> 原因是面板关闭后残留的 `Input.Changed` 事件会再次触发弹出，
+> 造成面板反复叠加，主动唤起可以彻底避开这个竞态。
+
+### 会话持久化
+
+```
+.agents/sessions/
+├── 20261105-113028.jsonl
+└── 20261105-114102.jsonl
+```
+
+JSONL 格式，首行 meta（标题/时间/条数），其后一行一条消息。
+排序按会话编号（即创建时间），`/new` 与退出时自动保存。
+
+---
+
+## 配置文件
+
+### 首次运行自动生成
+
+启动时若程序目录下没有 `config.ini`，会**自动生成完整模板**并弹出提示：
+
+```
+┌─────────────────────────────────────────┐
+│ 需要配置 API Key                        │
+├─────────────────────────────────────────┤
+│ ### 已创建新的配置文件                  │
+│                                         │
+│ 里面填的是示例信息，还不能直接用。      │
+│ 1. 用编辑器打开上面的文件               │
+│ 2. 把 [llm] 的 api_key 换成真实密钥     │
+│ 3. 保存后重新启动 wAgent                │
+│                                         │
+│                        [ 知道了 ]       │
+└─────────────────────────────────────────┘
+```
+
+点「知道了」后 wAgent 退出。填好 key 重新启动即可。
+
+### 全部参数集中管理
+
+所有可调参数都在 `config.ini`，dataclass 默认值只是兜底：
+
+| 小节 | 关键项 |
+|------|--------|
+| `[llm]` | `base_url` `api_key` `model` `timeout` |
+| `[agent]` | `max_tool_rounds` `max_model_calls_per_round` |
+| `[context]` | `warn_ratio` `danger_ratio` `default_window` `archive_dir` `recall_max_snippets` … |
+| `[session]` | `dir` `autosave` `agents_md` |
+| `[search]` `[fetch]` `[cli]` `[fs]` | 各工具的超时与长度上限 |
+| `[mcp]` | `filename` `connect_timeout` `prefix_mode` `async_load` |
+| `[ui]` | `sidebar_width` `max_skill_desc` `max_tool_desc` |
+
+只有 `[llm]` 的 `base_url` / `api_key` / `model` 是必需的，
+其余缺失一律回退默认值，不会阻断启动。
+
+---
+
+## AGENTS.md 项目指令
+
+采用 **「一次注入，全程复用」** 策略：
+
+```
+会话首次加载
+    ↓
+读取 <项目根>/AGENTS.md
+    ↓
+作为一条 user 消息追加到聊天历史
+    ↓
+随会话保存到 .agents/sessions/<id>.jsonl
+    ↓
+后续轮次直接复用，不再重复注入
+```
+
+注入的消息带固定前缀，用于识别是否已注入：
+
+```
+[项目指令 AGENTS.md]
+以下是本项目的约定与要求，请在本次会话中始终遵守：
+
+<文件内容>
+```
+
+**为什么不在每轮拼到 System Prompt 里**：那样每次请求的 messages
+前缀都会变化，服务端 prompt cache 完全失效。一次注入后前缀稳定，
+缓存才能持续命中。
+
+恢复会话时会检测历史里有没有这个标记，有就跳过注入，避免重复。
+
+---
+
+## MCP 异步加载
+
+先进入界面，再在后台连接，连上后动态刷新：
+
+```
+启动 → 进入 TUI（侧栏空白，15 个工具）
+         ↓ 后台线程
+    逐个连接 MCP Server
+         ↓ 每连上一个
+    侧栏刷新 + 新工具注册进 Agent
+         ↓
+    侧栏 MCP · 2/2，19 个工具
+```
+
+实测：
+
+```
+1) 进入界面: 工具 15, 侧栏=''
+2) 加载完成: 工具 19
+   侧栏:
+      MCP · 2/2
+      • pet-hospital  1 个工具
+      • bazi  3 个工具
+```
+
+实现要点：`McpManager` 拆成 `load_config()`（只读配置）与
+`connect_all()`（逐个连接）两步，每连完一个服务器就调用
+`set_tool_sink()` 注册的回调，TUI 借此增量刷新侧栏与工具集。
+
+关掉异步（`[mcp] async_load = false`）则退回启动时同步连接。
+
+---
+
+## 上下文管理
+
+长任务会不断累积对话，最终撑爆上下文窗口。wAgent 用**压缩 + 归档 + 检索**
+三件事配合解决，全部是本地实现，不用向量库或 Embedding。
+
+### 顶栏计量
+
+始终显示在顶栏下方一行：
+
+```
+上下文 2.4k / 128k · 2%                ← 正常
+上下文 96.0k / 128k · 75%  ⚠ 已达 70%，请执行 /compact
+上下文 20.0k / 128k（默认） · 16% · 估算
+⟳ 正在压缩上下文…（工具已禁用）
+```
+
+- `（默认）`：模型不在已知窗口表里，按 128k 推测
+- `· 估算`：没能从 API 拿到 usage，按字符数估算
+- 超过 70% 变黄，超过 85% 变红
+
+### 用量计量
+
+优先用 **API 返回的 `prompt_tokens`**（通过 `stream_options: {"include_usage": true}` 获取），
+它天然包含 System Prompt、历史消息与工具定义，最准确。
+
+拿不到时按消息内容估算：
+
+- CJK 字符 1 token
+- 其余 4 字符 1 token
+- 工具定义的 JSON Schema 也计入
+
+模型窗口表在 `core/context/tokens.py`，支持精确匹配与模糊匹配
+（`deepseek-chat-0324` 能匹配到 `deepseek-chat`）。
+
+### 70% 阈值行为
+
+| 状态 | 行为 |
+|------|------|
+| < 70% | 正常对话 |
+| ≥ 70% | 顶栏变黄并提示；**暂停接受新提示词**，必须先 `/compact` |
+| 压缩中 | 输入框禁用；禁止执行任何工具；禁止处理新任务 |
+| 压缩成功 | 解除限制，恢复输入 |
+
+### `/compact` 流程
+
+```
+1. 归档原始上下文 → .agents/context/20261022-153000.jsonl
+   （必须成功，否则中止，原上下文不受影响）
+2. 用专用 Prompt 让 LLM 生成约 5000 tokens 摘要
+3. 用「摘要 + 归档说明」替换历史，保留 System Prompt 与工具定义
+4. 解除输入限制
+```
+
+归档文件是 JSONL，每行一条消息，完整保留：
+
+```json
+{"type":"meta","archive_id":"20261022-153000","created_at":"...","message_count":5}
+{"seq":0,"role":"user","content":"..."}
+{"seq":1,"role":"assistant","content":null,"tool_calls":[{"id":"c1",...}]}
+{"seq":2,"role":"tool","tool_call_id":"c1","content":"咪咪 住院中 猫瘟"}
+```
+
+注意工具调用的**参数**和工具返回的**结果**都在，顺序用 `seq` 保留。
+
+压缩后历史末尾会追加：
+
+```
+此前上下文已于 2026-11-05 10:23:15 完成压缩，原始上下文保存在编号为
+20261105-102315 的归档文件中。如需查找历史信息，请使用 recallContext 工具。
+```
+
+**压缩失败时原上下文完全保留**，可以改完再试。
+
+### 压缩结果对比面板
+
+压缩成功后自动弹出左右两栏面板：
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ 上下文压缩完成 · 2.3k → 3.3k tokens · 归档 20261105-111452  │
+├───────────────────────────┬────────────────────────────────┤
+│ 压缩前原始上下文（2.3k）   │ 压缩后摘要（3.3k）              │
+│ ▌第 0 行：user            │ ▌# 会话上下文工作摘要           │
+│ ▌第 1 行：assistant       │ ▌## 1. 用户目标与要求           │
+│ ▌（可滚动）               │ ▌（可滚动，Markdown 渲染）      │
+│                           │                                │
+├───────────────────────────┴────────────────────────────────┤
+│                                          [ 关闭 (Esc) ]    │
+└────────────────────────────────────────────────────────────┘
+```
+
+- **左栏**：压缩前的原始上下文转录（橙色边框）
+- **右栏**：压缩后的摘要，按 Markdown 渲染（绿色边框）
+- **两栏各自独立滚动**，鼠标滚轮 / PageUp / PageDown 均可
+- `Esc` 或点「关闭」退出
+
+面板只用于回顾，关闭后不影响压缩结果。
+
+### recallContext 工具
+
+模型发现摘要不够详细时主动调用：
+
+```json
+{"text": "李四", "id": "20261105-102315"}   // id 可省略
+```
+
+| 参数 | 必填 | 说明 |
+|------|:----:|------|
+| `text` | ✅ | 关键词，多个用空格分隔 |
+| `id` | ❌ | 指定归档；不填则检索全部 |
+
+检索是**本地全文匹配**：切分关键词 → 逐行扫描 JSONL → 按命中次数排序 →
+返回片段 + 归档编号 + 消息序号。
+
+返回长度受控（最多 6 段、总计 4000 字符），避免检索结果又撑满上下文。
+
+实测：
+
+```
+[1] 归档 20261105-102315 · 第 3 条 · tool（命中 1 次）
+…"ownerName": "李四", "ownerPhone": "13900002222", "status": "住院中"…
+```
+
+### 代码位置
+
+| 文件 | 职责 |
+|------|------|
+| `core/context/tokens.py` | Token 估算、模型窗口表 |
+| `core/context/usage.py` | `ContextUsage` 快照、70% 判断 |
+| `core/context/archive.py` | 归档读写（JSONL） |
+| `core/context/compactor.py` | 压缩流程、专用 Prompt |
+| `core/context/recall.py` | `recallContext` 工具 |
+| `tui/widgets/context_meter.py` | 顶栏计量控件 |
+
+### 设计取舍
+
+- **不用向量库**：关键词检索足够应对「我是不是说过 X」这类回溯，且零依赖
+- **归档先于压缩**：先落盘再摘要，任何后续失败都不会丢原始记录
+- **System Prompt 不参与压缩**：技能清单、MCP 说明等基本能力必须保留
+- **压缩期间禁用工具**：避免压缩过程中又产生新的工具调用消息，导致替换错乱
 
 ---
 
