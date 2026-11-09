@@ -4,7 +4,7 @@
 
 ```
 D:\LLM-Course\
-├── PetHospitalServer\     宠物医院服务端
+├── PetHospitalServer\     宠物医院服务端（含 pethospital.exe，已随仓库分发）
 ├── PetHospitalMCP\        任务一：宠物医院 MCP（list_pets）
 ├── AnythingLLMMCP\        任务二：AnythingLLM MCP（读第一个工作区文件）
 ├── AnythingLLMWebPage\    任务三：上传网页（上传 + 嵌入）

@@ -1,37 +1,46 @@
 # 上游依赖说明（务必先读）
 
-本项目由**三个可独立运行的模块**组成，其中两个依赖外部前置条件。
-这些依赖**不随仓库分发**，需要按下面的说明准备。
+本项目由**三个可独立运行的模块**组成。宠物医院服务端的可执行文件**已随仓库分发**，
+其余外部服务（AnythingLLM）需自行准备。
 
 | 模块 | 是否自带可运行内容 | 前置条件 |
 |------|:------------------:|----------|
 | `Agent/wAgent` | ✅ 完全自带 | 只需 Python 依赖与 API Key |
 | `AnythingLLMWebPage` | ✅ 完全自带 | 需要一个运行中的 AnythingLLM |
 | `AnythingLLMMCP` | ✅ 完全自带 | 同上（含 API Key） |
-| `PetHospitalMCP` | ⚠️ 需要二进制 | 需要课程提供的 `pethospital.exe` |
+| `PetHospitalMCP` | ✅ 完全自带 | 服务端二进制已随仓库分发 |
 
 ---
 
 ## 一、宠物医院服务端（`PetHospitalServer/`）
 
-### 为什么不在仓库里
+### 交付方式
 
-`pethospital.exe` 约 6.5 MB，是**课程提供的第三方可执行文件**，不是本项目的源代码。
-把它放进 Git 仓库会让仓库体积膨胀，且无法通过代码审查判断其内容，
-因此通过 `.gitignore` 排除。
+`pethospital.exe` **已随仓库分发**，克隆后即可直接运行，无需额外获取。
 
-### 如何获取
+| 项 | 值 |
+|----|-----|
+| 文件 | `PetHospitalServer/pethospital.exe` |
+| 大小 | 6.47 MB |
+| 来源 | 课程提供（指导教师：谢心） |
+| SHA256 | `1CC99DB34E2CBB133897644BCAE298ABD53DFBE6315703601D1F57D9D988803E` |
 
-按课程要求，向指导教师（谢心）获取 `pethospital.exe`，然后放到：
+克隆后校验完整性：
 
+```powershell
+Get-FileHash PetHospitalServer\pethospital.exe -Algorithm SHA256
+# 应与上表一致
 ```
-PetHospitalServer/pethospital.exe
-```
+
+> 该文件仅用于课程学习与本地演示，版权归课程提供方所有，请勿另行分发。
 
 ### 数据文件
 
-服务端会在首次启动时自动创建 `PetHospitalServer/data/pet.db`。
-仓库同样不包含该文件（`.gitignore` 中排除），因为它是运行时产生的数据。
+服务端首次启动时会自动创建 `PetHospitalServer/data/pet.db`。
+**该文件不入库**（`.gitignore` 中排除），因为它是运行时产生的业务数据，
+每次运行都可能变化，且体积约 2.4 MB。
+
+首次启动后会自动初始化演示数据。
 
 ### 验证服务端可用
 
@@ -49,16 +58,17 @@ Invoke-WebRequest http://127.0.0.1:8080/health -UseBasicParsing
 
 返回含 `"status":"healthy"` 的 JSON 即正常。
 
-### 没有二进制时能做什么
+### 若二进制无法运行
 
-`PetHospitalMCP` 本身仍然可以启动、可以自检协议、可以被 MCP 客户端连接并列出工具。
-只是调用 `list_pets` 时会返回明确的结构化错误：
+某些环境（如非 Windows 系统、被杀毒软件拦截）可能无法运行该 exe。
+此时 `PetHospitalMCP` 仍可启动、可自检协议、可被 MCP 客户端连接并列出工具，
+只是调用 `list_pets` 会返回明确的结构化错误：
 
 ```json
 {"error": {"code": "BACKEND_UNAVAILABLE", "message": "无法连接 http://127.0.0.1:8080（已重试 3 次），请先启动 pethospital.exe"}}
 ```
 
-这个错误是可诊断的，不会静默失败。
+这个错误可诊断，不会静默失败。
 
 ---
 

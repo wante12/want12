@@ -18,8 +18,10 @@ config.ini
 Agent/Practice02/Mermaid.mmd
 Agent/wAgent/Mermaid.mmd
 
-# 宠物医院服务端二进制与数据（谢老师提供，非本人代码）
-PetHospitalServer/pethospital.exe
+# 宠物医院服务端
+# 可执行文件随仓库分发（课程提供，便于克隆后直接运行），约 6.5 MB
+# SHA256: 1CC99DB34E2CBB133897644BCAE298ABD53DFBE6315703601D1F57D9D988803E
+# 运行时数据不入库（含业务数据，且每次运行都会变化）
 PetHospitalServer/data/
 
 # Node 依赖（bazi-mcp 约 34MB）
