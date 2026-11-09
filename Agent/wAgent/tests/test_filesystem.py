@@ -171,9 +171,19 @@ def test_createfile_rejects_path_in_filename(tmp_path):
 def test_editfile_overwrite(tmp_path):
     f = tmp_path / "a.txt"
     f.write_text("old", encoding="utf-8")
-    out = EditFileTool().run(str(f), "new", "overwrite")
+    # 覆盖是破坏性操作，必须显式确认
+    out = EditFileTool().run(str(f), "new", "overwrite", confirm=True)
     assert "已覆盖文件" in out
     assert f.read_text(encoding="utf-8") == "new"
+
+
+def test_editfile_overwrite_requires_confirm(tmp_path):
+    """未传 confirm 时应拒绝覆盖，原内容保持不变。"""
+    f = tmp_path / "a.txt"
+    f.write_text("old", encoding="utf-8")
+    out = EditFileTool().run(str(f), "new", "overwrite")
+    assert "拒绝覆盖" in out
+    assert f.read_text(encoding="utf-8") == "old"
 
 
 def test_editfile_append(tmp_path):
@@ -264,7 +274,7 @@ def test_all_tools_registered():
     names = {t.name for t in build_fs_tools()}
     assert names == {
         "getCwd", "listDir", "getFileType", "readFile", "createFile",
-        "editFile", "createDir", "deleteDir", "deleteFile",
+        "editFile", "createDir", "renamePath", "deleteDir", "deleteFile",
     }
 
 

@@ -132,7 +132,7 @@ class McpServerHandle:
 
         stack = AsyncExitStack()
         try:
-            ctx = Client(self.config.url)
+            ctx = Client(self._build_target())
             client = await stack.enter_async_context(ctx)
         except Exception as exc:  # noqa: BLE001 连接失败统一包装
             await stack.aclose()
@@ -140,6 +140,36 @@ class McpServerHandle:
 
         self._client = client
         self._exit_stack = stack
+
+    def _build_target(self):
+        """按传输类型构造 Client 的连接目标。
+
+        - HTTP  ：直接传 URL 字符串
+        - stdio ：传 StdioServerParameters，由 SDK 负责拉起子进程
+        """
+        if not self.config.is_stdio:
+            return self.config.url
+
+        from mcp.client.stdio import StdioServerParameters
+
+        if not self.config.command:
+            raise McpConnectionError("stdio 配置缺少 command")
+
+        kwargs: dict = {
+            "command": self.config.command,
+            "args": list(self.config.args),
+        }
+        if self.config.env:
+            kwargs["env"] = dict(self.config.env)
+        if self.config.cwd:
+            kwargs["cwd"] = self.config.cwd
+
+        try:
+            return StdioServerParameters(**kwargs)
+        except TypeError:
+            # 兼容不接受 cwd 的旧版本 SDK
+            kwargs.pop("cwd", None)
+            return StdioServerParameters(**kwargs)
 
     async def _close(self) -> None:
         if self._exit_stack is not None:
@@ -167,6 +197,13 @@ class McpServerHandle:
             return f"连接超时（{text}）"
         if "404" in text:
             return f"URL 路径不正确（{text}）"
+        # stdio 子进程相关
+        if isinstance(cause, FileNotFoundError):
+            return f"找不到可执行文件（{text}），请检查 command 是否正确、是否在 PATH 中"
+        if isinstance(cause, PermissionError):
+            return f"无权执行该命令（{text}）"
+        if "no such file" in lowered or "not found" in lowered:
+            return f"找不到命令或程序（{text}）"
         if "connect" in lowered:
             return f"无法连接（{text}）"
         return f"{type(cause).__name__}: {text}"

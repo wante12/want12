@@ -17,6 +17,8 @@ from pathlib import Path
 
 #: 默认文件名（可被 config.ini 的 [session] agents_md 覆盖）
 AGENTS_FILE = "AGENTS.md"
+#: 兼容的单数写法。两种文件名都会被识别，优先使用复数形式。
+AGENT_FILE_ALIASES = ("AGENT.md",)
 #: 单文件长度上限，避免超大文件把上下文撑爆
 MAX_CHARS = 60_000
 #: 注入消息的前缀标记，用于识别「这条消息是否已注入」
@@ -37,14 +39,31 @@ class AgentsMd:
     _truncated: bool = False
 
 
+def candidate_names(filename: str = AGENTS_FILE) -> tuple[str, ...]:
+    """返回要查找的文件名候选（含单数兼容名）。
+
+    若配置里指定了自定义文件名，只查该名字；
+    否则依次尝试 AGENTS.md、AGENT.md。
+    """
+    if filename and filename != AGENTS_FILE:
+        return (filename,)
+    return (AGENTS_FILE, *AGENT_FILE_ALIASES)
+
+
 def find_agents_md(
     project_root: Path | str | None = None,
     filename: str = AGENTS_FILE,
 ) -> Path | None:
-    """在项目根查找 AGENTS.md，返回路径或 None。"""
+    """在项目根查找项目指令文件，返回路径或 None。
+
+    兼容 AGENTS.md 与 AGENT.md 两种写法，前者优先。
+    """
     root = Path(project_root) if project_root else Path.cwd()
-    path = root / filename
-    return path if path.is_file() else None
+    for name in candidate_names(filename):
+        path = root / name
+        if path.is_file():
+            return path
+    return None
 
 
 def load_agents_md(

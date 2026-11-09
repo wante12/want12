@@ -9,7 +9,7 @@ import sys
 
 import httpx
 
-URL = "http://127.0.0.1:8091/mcp"
+URL = "http://127.0.0.1:8090/mcp"
 MODERN = "2026-07-28"
 
 

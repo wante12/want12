@@ -752,11 +752,28 @@ wAgent 可以连接外部 MCP Server，把它们提供的工具当作本地工�
 }
 ```
 
-| 字段 | 说明 |
-|------|------|
-| `type` | `streamableHttp`（本版本仅支持这个） |
-| `url` | MCP 端点地址 |
-| `headers` | 可选，附加 HTTP 头（如 `Authorization`） |
+支持两种传输：
+
+| 传输 | 字段 | 说明 |
+|------|------|------|
+| `streamableHttp` | `type` `url` `headers` | 远程 HTTP 端点 |
+| `stdio` | `command` `args` `env` `cwd` | 本地子进程，通过标准输入输出通信 |
+
+未声明 `type` 时按字段推断：有 `command` 走 stdio，有 `url` 走 http。
+
+stdio 示例：
+
+```json
+{
+  "mcpServers": {
+    "local-tool": {
+      "command": "npx",
+      "args": ["-y", "some-mcp"],
+      "env": { "TOKEN": "..." }
+    }
+  }
+}
+```
 
 ### 工作流程
 

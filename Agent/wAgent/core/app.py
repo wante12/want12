@@ -20,7 +20,7 @@ from .mcp.tools import build_mcp_tools
 from .skills.prompt import build_skills_prompt
 from .skills.registry import SkillRegistry
 from .tools.base import Tool, ToolRegistry
-from .tools.builtin import GetDateTool
+from .tools.builtin import GetDateTool, IsLeapYearTool
 from .tools.cli import RunCliTool
 from .tools.create_skill import build_create_skill_tool
 from .tools.fetch import FetchWebTool
@@ -53,6 +53,7 @@ def build_registry(
     """
     registry = ToolRegistry()
     registry.register(GetDateTool())
+    registry.register(IsLeapYearTool())
     registry.register(SearchWebTool(search or SearchSettings()))
     registry.register(FetchWebTool(fetch or FetchSettings()))
     registry.register(RunCliTool(cli or CliSettings()))

@@ -1,7 +1,9 @@
-"""AnythingLLM MCP 服务 —— 单工具 MVP。
+"""AnythingLLM MCP 服务。
 
-只暴露一个工具 list_workspace_files：
-    读取「第一个工作区」的文件信息（列表 + 可选的关键词预览）。
+暴露三个工具（均作用于「第一个工作区」）：
+    list_workspace_files  读取工作区的文件信息（列表 + 可选内容预览）
+    workspace_chat        工作区内的检索增强对话（chat / query 两种模式）
+    search_vectors        工作区内向量相似度检索（只检索不生成）
 
 传输：Streamable HTTP，无握手、无会话、无长连接。
 协议：同时兼容 2026-07-28 之前（旧版 initialize）与之后（单次 POST + _meta 信封）。
@@ -131,6 +133,128 @@ async def list_workspace_files(
             for d in all_docs[:limit]
         ],
     }
+
+
+@server.tool()
+async def workspace_chat(
+    message: str,
+    mode: str = "chat",
+    session_id: str = "",
+) -> dict[str, Any]:
+    """在第一个工作区内进行对话（检索增强问答）。
+
+    message   ：用户问题
+    mode      ：chat 为普通对话，query 为只做向量检索不生成（默认 chat）
+    session_id：可选，传入则以多轮会话方式提问
+    """
+    if not (message or "").strip():
+        return _err("VALIDATION_ERROR", "message 不能为空")
+    if mode not in ("chat", "query"):
+        return _err("VALIDATION_ERROR", "mode 只能是 chat 或 query")
+    if not API_KEY:
+        return _err("CONFIG_ERROR", "未设置 ANYTHINGLLM_API_KEY 环境变量")
+
+    try:
+        async with httpx.AsyncClient(base_url=BASE_URL, timeout=60.0) as c:
+            slug = await _first_workspace_slug(c)
+            if isinstance(slug, dict):
+                return slug
+
+            payload: dict[str, Any] = {
+                "message": message.strip(),
+                "mode": mode,
+            }
+            if session_id:
+                payload["sessionId"] = session_id
+
+            result = await _call(c, "POST", f"/api/v1/workspace/{slug}/chat", json=payload)
+    except RuntimeError as e:
+        return e.args[0] if e.args else _err("INTERNAL_ERROR", str(e))
+
+    text = result.get("textResponse") or result.get("text") or ""
+    sources = result.get("sources") or []
+    return {
+        "workspace": slug,
+        "mode": mode,
+        "reply": text,
+        "sourceCount": len(sources),
+        "sources": [
+            {
+                "title": s.get("title") or (s.get("url") or "").split("/")[-1],
+                "score": round(float(s.get("score") or 0), 4),
+            }
+            for s in sources[:10]
+        ],
+    }
+
+
+@server.tool()
+async def search_vectors(
+    query: str,
+    top_n: int = 4,
+    score_threshold: float = 0.2,
+) -> dict[str, Any]:
+    """在第一个工作区内做向量相似度检索（不生成回答）。
+
+    query：检索语句
+    top_n：返回最相关的片段数，默认 4，最大 20
+    score_threshold：相似度下限，默认 0.2，低于该值的结果会被过滤
+    """
+    if not (query or "").strip():
+        return _err("VALIDATION_ERROR", "query 不能为空")
+    if not 1 <= top_n <= 20:
+        return _err("VALIDATION_ERROR", "top_n 必须在 1~20 之间")
+    if not 0.0 <= score_threshold <= 1.0:
+        return _err("VALIDATION_ERROR", "score_threshold 必须在 0~1 之间")
+    if not API_KEY:
+        return _err("CONFIG_ERROR", "未设置 ANYTHINGLLM_API_KEY 环境变量")
+
+    try:
+        async with httpx.AsyncClient(base_url=BASE_URL, timeout=30.0) as c:
+            slug = await _first_workspace_slug(c)
+            if isinstance(slug, dict):
+                return slug
+
+            result = await _call(
+                c,
+                "POST",
+                f"/api/v1/workspace/{slug}/vector-search",
+                json={
+                    "query": query.strip(),
+                    "topN": top_n,
+                    "scoreThreshold": score_threshold,
+                },
+            )
+    except RuntimeError as e:
+        return e.args[0] if e.args else _err("INTERNAL_ERROR", str(e))
+
+    chunks = result.get("results") or []
+    return {
+        "workspace": slug,
+        "query": query.strip(),
+        "count": len(chunks),
+        "chunks": [
+            {
+                "title": ch.get("title") or "",
+                "score": round(float(ch.get("score") or 0), 4),
+                "text": (ch.get("text") or "")[:800],
+            }
+            for ch in chunks
+        ],
+    }
+
+
+async def _first_workspace_slug(c: httpx.AsyncClient):
+    """取第一个工作区的 slug。失败时返回 error dict（调用方直接返回）。"""
+    try:
+        ws = await _call(c, "GET", "/api/v1/workspaces")
+    except RuntimeError as e:
+        return e.args[0] if e.args else _err("INTERNAL_ERROR", "取工作区失败")
+    workspaces = ws.get("workspaces") or ws.get("items") or []
+    if not workspaces:
+        return _err("NO_WORKSPACE", "AnythingLLM 里还没有任何工作区")
+    first = workspaces[0]
+    return first.get("slug") or first.get("id") or first.get("name")
 
 
 @server.custom_route("/health", methods=["GET"])

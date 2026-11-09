@@ -124,11 +124,24 @@ class FsSettings:
 
     max_read_chars: int = 20000
     max_list_entries: int = 500
+    #: 允许访问的根目录（逗号或分号分隔）。为空表示不限制。
+    allowed_roots: str = ""
+    #: 覆盖已有文件、删除文件/目录是否要求显式确认
+    require_confirm: bool = True
+    #: 是否自动把当前工作目录加入允许范围
+    include_cwd: bool = True
+
+    @property
+    def root_list(self) -> list[str]:
+        raw = (self.allowed_roots or "").replace(";", ",")
+        return [p.strip() for p in raw.split(",") if p.strip()]
 
     def __repr__(self) -> str:
         return (
             f"FsSettings(max_read_chars={self.max_read_chars}, "
-            f"max_list_entries={self.max_list_entries})"
+            f"max_list_entries={self.max_list_entries}, "
+            f"allowed_roots={self.root_list!r}, "
+            f"require_confirm={self.require_confirm})"
         )
 
 
@@ -438,6 +451,14 @@ workdir =
 max_read_chars = 20000
 ; listDir 最多列出的条目数
 max_list_entries = 500
+; 允许访问的根目录，多个用逗号分隔。留空表示不限制。
+; 建议显式限定，防止模型误操作范围外的文件。
+; 例如：allowed_roots = D:/office, D:/projects
+allowed_roots =
+; 覆盖已有文件、删除操作是否要求显式确认
+require_confirm = true
+; 是否自动把当前工作目录加入允许范围
+include_cwd = true
 
 [mcp]
 ; MCP 服务器配置文件（相对项目根）

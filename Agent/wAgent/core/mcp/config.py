@@ -1,18 +1,31 @@
 """`.mcp.json` 配置的解析。
 
 文件位置：**项目根**（程序启动时的工作目录），不是源代码目录。
-格式兼容 Claude Desktop / MCP 生态的常见写法：
+格式兼容 Claude Desktop / MCP 生态的常见写法，支持两种传输：
 
-    {
-      "mcpServers": {
-        "pet-hospital": {
-          "type": "streamableHttp",
-          "url": "http://127.0.0.1:8080/mcp"
-        }
-      }
-    }
+    1) Streamable HTTP（远程 URL）：
+       {
+         "mcpServers": {
+           "pet-hospital": {
+             "type": "streamableHttp",
+             "url": "http://127.0.0.1:8090/mcp"
+           }
+         }
+       }
 
-本阶段只支持 Streamable HTTP（远程 URL）。
+    2) stdio（本地子进程，通过标准输入输出通信）：
+       {
+         "mcpServers": {
+           "bazi": {
+             "command": "npx",
+             "args": ["-y", "bazi-mcp"],
+             "env": {"NODE_ENV": "production"}
+           }
+         }
+       }
+
+未显式声明 `type` 时按字段推断：
+    有 `command` → stdio；有 `url` → streamableHttp。
 """
 
 from __future__ import annotations
@@ -24,8 +37,14 @@ from typing import Any
 
 #: 配置文件名
 DEFAULT_FILENAME = ".mcp.json"
-#: 支持的传输类型别名（均为 Streamable HTTP）
+#: 支持的传输类型别名
 HTTP_TYPES = {"streamablehttp", "streamable-http", "http", "sse", None, ""}
+STDIO_TYPES = {"stdio"}
+#: 全部允许的类型
+ALL_TYPES = HTTP_TYPES | STDIO_TYPES
+
+TRANSPORT_HTTP = "http"
+TRANSPORT_STDIO = "stdio"
 
 
 class McpConfigError(Exception):
@@ -34,15 +53,41 @@ class McpConfigError(Exception):
 
 @dataclass(frozen=True)
 class McpServerConfig:
-    """单个 MCP Server 的连接信息。"""
+    """单个 MCP Server 的连接信息。
+
+    两种传输共用一个结构，靠 `transport` 区分：
+    - http  ：使用 url / headers
+    - stdio ：使用 command / args / env / cwd
+    """
 
     name: str
-    url: str
+    url: str = ""
     #: 额外的 HTTP 头（如 Authorization），便于连需要鉴权的服务器
     headers: dict[str, str] = field(default_factory=dict)
+    #: http 或 stdio
+    transport: str = TRANSPORT_HTTP
+    #: stdio：可执行文件
+    command: str = ""
+    #: stdio：参数列表
+    args: tuple[str, ...] = ()
+    #: stdio：环境变量（在继承当前环境的基础上追加）
+    env: dict[str, str] = field(default_factory=dict)
+    #: stdio：工作目录
+    cwd: str | None = None
+
+    @property
+    def is_stdio(self) -> bool:
+        return self.transport == TRANSPORT_STDIO
+
+    def describe(self) -> str:
+        """给界面/日志看的一行描述。"""
+        if self.is_stdio:
+            parts = " ".join([self.command, *self.args]).strip()
+            return f"stdio: {parts}"
+        return f"http: {self.url}"
 
     def __repr__(self) -> str:
-        return f"McpServerConfig(name={self.name!r}, url={self.url!r})"
+        return f"McpServerConfig(name={self.name!r}, {self.describe()!r})"
 
 
 @dataclass
@@ -103,36 +148,113 @@ def load_mcp_config(
             issues.append(McpConfigIssue(name, "配置项必须是对象"))
             continue
 
-        transport = entry.get("type", entry.get("transport"))
-        if isinstance(transport, str) and transport.lower() not in HTTP_TYPES:
+        raw_type = entry.get("type", entry.get("transport"))
+        transport = raw_type.lower() if isinstance(raw_type, str) else raw_type
+
+        # 未声明 type 时按字段推断：有 command 走 stdio，否则走 http
+        if transport in (None, ""):
+            transport = TRANSPORT_STDIO if entry.get("command") else TRANSPORT_HTTP
+
+        if transport not in ALL_TYPES:
             issues.append(
                 McpConfigIssue(
                     name,
-                    f"不支持的传输类型「{transport}」，本版本仅支持 streamableHttp",
+                    f"不支持的传输类型「{raw_type}」，"
+                    "可选 streamableHttp 或 stdio",
                 )
             )
             continue
 
-        url = str(entry.get("url") or "").strip()
-        if not url:
-            issues.append(McpConfigIssue(name, "缺少 url 字段"))
-            continue
-        if not url.lower().startswith(("http://", "https://")):
-            issues.append(McpConfigIssue(name, f"url 必须以 http:// 或 https:// 开头：{url}"))
-            continue
+        if transport == TRANSPORT_STDIO:
+            server, issue = _parse_stdio(name, entry)
+        else:
+            server, issue = _parse_http(name, entry)
 
-        headers_raw = entry.get("headers") or {}
-        headers: dict[str, str] = {}
-        if isinstance(headers_raw, dict):
-            headers = {str(k): str(v) for k, v in headers_raw.items()}
-
-        servers.append(McpServerConfig(name=str(name), url=url, headers=headers))
+        if issue is not None:
+            issues.append(issue)
+            continue
+        servers.append(server)
 
     return servers, issues
 
 
+def _parse_http(
+    name: str, entry: dict[str, Any]
+) -> tuple[McpServerConfig, McpConfigIssue | None]:
+    """解析 Streamable HTTP 配置。"""
+    url = str(entry.get("url") or "").strip()
+    if not url:
+        return _empty(), McpConfigIssue(name, "缺少 url 字段")
+    if not url.lower().startswith(("http://", "https://")):
+        return _empty(), McpConfigIssue(
+            name, f"url 必须以 http:// 或 https:// 开头：{url}"
+        )
+
+    headers_raw = entry.get("headers") or {}
+    headers: dict[str, str] = {}
+    if isinstance(headers_raw, dict):
+        headers = {str(k): str(v) for k, v in headers_raw.items()}
+
+    return (
+        McpServerConfig(
+            name=str(name),
+            url=url,
+            headers=headers,
+            transport=TRANSPORT_HTTP,
+        ),
+        None,
+    )
+
+
+def _parse_stdio(
+    name: str, entry: dict[str, Any]
+) -> tuple[McpServerConfig, McpConfigIssue | None]:
+    """解析 stdio（本地子进程）配置。"""
+    command = str(entry.get("command") or "").strip()
+    if not command:
+        return _empty(), McpConfigIssue(
+            name, "stdio 传输缺少 command 字段"
+        )
+
+    args_raw = entry.get("args") or []
+    if isinstance(args_raw, str):
+        args_raw = [args_raw]
+    if not isinstance(args_raw, (list, tuple)):
+        return _empty(), McpConfigIssue(name, "args 必须是数组")
+    args = tuple(str(a) for a in args_raw)
+
+    env_raw = entry.get("env") or {}
+    env: dict[str, str] = {}
+    if isinstance(env_raw, dict):
+        env = {str(k): str(v) for k, v in env_raw.items()}
+
+    cwd_raw = entry.get("cwd")
+    cwd = str(cwd_raw).strip() if cwd_raw else None
+
+    return (
+        McpServerConfig(
+            name=str(name),
+            transport=TRANSPORT_STDIO,
+            command=command,
+            args=args,
+            env=env,
+            cwd=cwd,
+        ),
+        None,
+    )
+
+
+def _empty() -> McpServerConfig:
+    return McpServerConfig(name="")
+
+
 __all__ = [
+    "ALL_TYPES",
     "DEFAULT_FILENAME",
+    "HTTP_TYPES",
+    "STDIO_TYPES",
+    "TRANSPORT_HTTP",
+    "TRANSPORT_STDIO",
     "McpConfigError",
     "McpConfigIssue",
     "McpServerConfig",

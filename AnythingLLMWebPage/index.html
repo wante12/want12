@@ -84,12 +84,30 @@ function render() {
   $('go').disabled = picked.length === 0;
 }
 
+// 把 HTTP 状态码翻译成可操作的提示，不向前端回显上游响应体。
+// 上游正文可能含内部路径、堆栈或配置信息，直接展示既不友好也不安全。
+function httpHint(step, status) {
+  const map = {
+    400: '请求格式不正确，通常是文件类型或字段名不被接受',
+    401: 'API Key 无效或缺失，请在 AnythingLLM 开发者 API 页面重新生成',
+    403: '没有权限，请确认该 Key 具备工作区读写权限',
+    404: '接口或工作区不存在，请检查服务地址后缀与工作区标识',
+    413: '文件太大，超过 AnythingLLM 的上传上限',
+    429: '请求过于频繁，请稍后重试',
+    500: 'AnythingLLM 内部错误，请查看其服务端日志',
+    502: '网关错误，服务可能正在重启',
+    503: '服务暂不可用，请确认 AnythingLLM 已启动',
+  };
+  const hint = map[status] || (status >= 500 ? '服务端故障，请稍后重试' : '请检查地址、Key 与文件类型');
+  return `${step}失败（HTTP ${status}）：${hint}`;
+}
+
 // 取第一个工作区的 slug
 async function resolveWorkspace() {
   const typed = $('ws').value.trim();
   if (typed) return typed;
   const r = await fetch(`${base()}/api/v1/workspaces`, { headers: auth() });
-  if (!r.ok) throw new Error(`读取工作区失败 HTTP ${r.status}（检查地址与 Key）`);
+  if (!r.ok) throw new Error(httpHint('读取工作区', r.status));
   const data = await r.json();
   const list = data.workspaces || [];
   if (!list.length) throw new Error('AnythingLLM 里还没有工作区，请先建一个');
@@ -104,9 +122,10 @@ async function uploadOne(file, slug) {
   const up = await fetch(`${base()}/api/v1/document/upload`, {
     method: 'POST', headers: auth(), body: fd
   });
-  const txt = await up.text();
-  if (!up.ok) throw new Error(`上传失败 HTTP ${up.status}: ${txt.slice(0, 160)}`);
+  if (!up.ok) throw new Error(httpHint('上传', up.status));
 
+  // 仅在成功时读取正文用于取 location
+  const txt = await up.text();
   let folder = '';
   try {
     const j = JSON.parse(txt);
@@ -121,7 +140,7 @@ async function uploadOne(file, slug) {
     headers: { ...auth(), 'Content-Type': 'application/json' },
     body: JSON.stringify({ adds: [folder] })
   });
-  if (!emb.ok) throw new Error(`嵌入失败 HTTP ${emb.status}: ${(await emb.text()).slice(0, 160)}`);
+  if (!emb.ok) throw new Error(httpHint('嵌入', emb.status));
   return '已上传并嵌入';
 }
 

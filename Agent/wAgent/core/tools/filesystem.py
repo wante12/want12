@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import mimetypes
 import os
 import shutil
@@ -36,6 +37,25 @@ _SNIFF_BYTES = 8192
 # 文本解码候选顺序（与 cli.py 保持一致，兼容中文环境）
 _ENCODINGS = ("utf-8", "gbk", "latin-1")
 
+#: 当前生效的允许根目录。由 build_fs_tools() 设置，_resolve() 据此做沙箱校验。
+#: 为空列表表示不限制（保持向后兼容）。
+_ALLOWED_ROOTS: contextvars.ContextVar[list[Path]] = contextvars.ContextVar(
+    "fs_allowed_roots", default=[]
+)
+#: 是否要求覆盖写入必须显式确认
+_REQUIRE_CONFIRM: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "fs_require_confirm", default=True
+)
+
+
+def reset_sandbox() -> None:
+    """清空沙箱设置，恢复「不限制」的默认行为。
+
+    测试用例之间必须调用，否则上一个用例的 allowed_roots 会泄漏到下一个。
+    """
+    _ALLOWED_ROOTS.set([])
+    _REQUIRE_CONFIRM.set(True)
+
 
 # ====================================================================== 辅助
 def _human_size(num: int) -> str:
@@ -47,9 +67,24 @@ def _human_size(num: int) -> str:
     return f"{num} B"
 
 
+class SandboxError(Exception):
+    """路径超出允许范围。"""
+
+
 def _resolve(raw: str) -> Path:
-    """把用户给的路径转成绝对路径（不要求已存在）。"""
-    return Path(os.path.expandvars(raw)).expanduser().resolve()
+    """把用户给的路径转成绝对路径（不要求已存在）。
+
+    若配置了 [fs] allowed_roots，则校验解析后的路径必须落在其中。
+    所有文件工具都经过这里，因此沙箱是统一的。
+    """
+    path = Path(os.path.expandvars(raw)).expanduser().resolve()
+
+    roots = _ALLOWED_ROOTS.get()
+    if roots:
+        error = _check_sandbox(path, roots)
+        if error:
+            raise SandboxError(error)
+    return path
 
 
 def _is_binary(path: Path) -> bool:
@@ -99,10 +134,76 @@ def _guard_destructive(target: Path) -> str | None:
     return None
 
 
+# ====================================================================== 沙箱
+def _parse_roots(raw: Any) -> list[Path]:
+    """把配置里的允许根目录解析成绝对路径列表。
+
+    支持字符串（分号/逗号分隔）或数组。
+    """
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        parts = [p for p in raw.replace(";", ",").split(",")]
+    elif isinstance(raw, (list, tuple)):
+        parts = list(raw)
+    else:
+        return []
+
+    roots: list[Path] = []
+    for item in parts:
+        text = str(item).strip()
+        if not text:
+            continue
+        try:
+            roots.append(Path(os.path.expandvars(text)).expanduser().resolve())
+        except OSError:
+            continue
+    return roots
+
+
+def _check_sandbox(target: Path, roots: list[Path]) -> str | None:
+    """检查路径是否落在允许的根目录内。返回错误信息或 None。
+
+    roots 为空表示不做限制（默认行为，保持向后兼容）。
+    """
+    if not roots:
+        return None
+
+    try:
+        resolved = target.resolve()
+    except OSError:
+        return f"拒绝访问：无法解析路径 {target}"
+
+    for root in roots:
+        if resolved == root or root in resolved.parents:
+            return None
+
+    allowed = "、".join(str(r) for r in roots)
+    return (
+        f"拒绝访问：{resolved} 不在允许的目录范围内。\n"
+        f"允许的根目录：{allowed}\n"
+        "如需放开，请在 config.ini 的 [fs] allowed_roots 中追加该目录。"
+    )
+
+
 def _require_exists(path: Path, kinds: str = "文件或目录") -> str | None:
     if not path.exists():
         return f"路径不存在：{path}"
     return None
+
+
+def _safe_resolve(raw: str) -> Path | str:
+    """带沙箱校验的路径解析。
+
+    返回 Path 表示通过；返回 str 表示被拒绝，内容即错误信息，
+    工具方法直接 return 该字符串即可。
+    """
+    try:
+        return _resolve(raw)
+    except SandboxError as exc:
+        return str(exc)
+    except OSError as exc:
+        return f"路径解析失败：{raw}（{exc}）"
 
 
 # ====================================================================== 工具
@@ -137,7 +238,9 @@ class ListDirTool(Tool):
         self._settings = settings or FsSettings()
 
     def run(self, path: str = ".", recursive: bool = False) -> str:
-        target = _resolve(path or ".")
+        target = _safe_resolve(path or ".")
+        if isinstance(target, str):
+            return target
         if not target.exists():
             return f"列目录失败：路径不存在 {target}"
         if not target.is_dir():
@@ -186,7 +289,9 @@ class GetFileTypeTool(Tool):
     def run(self, path: str) -> str:
         if not (path or "").strip():
             return "获取文件类型失败：path 不能为空。"
-        target = _resolve(path)
+        target = _safe_resolve(path)
+        if isinstance(target, str):
+            return target
         if not target.exists():
             return f"获取文件类型失败：文件不存在 {target}"
         if target.is_dir():
@@ -232,7 +337,9 @@ class ReadFileTool(Tool):
     def run(self, path: str) -> str:
         if not (path or "").strip():
             return "读取失败：path 不能为空。"
-        target = _resolve(path)
+        target = _safe_resolve(path)
+        if isinstance(target, str):
+            return target
         if not target.exists():
             return f"读取失败：文件不存在 {target}"
         if target.is_dir():
@@ -284,7 +391,9 @@ class CreateFileTool(Tool):
         if os.sep in filename or (os.altsep and os.altsep in filename):
             return f"创建失败：filename 只能是文件名，不能包含路径分隔符（收到「{filename}」）。"
 
-        folder = _resolve(directory or ".")
+        folder = _safe_resolve(directory or ".")
+        if isinstance(folder, str):
+            return folder
         if not folder.exists():
             return f"创建失败：目录不存在 {folder}（可先用 createDir 创建）"
         if not folder.is_dir():
@@ -308,7 +417,8 @@ class CreateFileTool(Tool):
 class EditFileTool(Tool):
     name = "editFile"
     description = (
-        "编辑已存在的纯文本文件。mode=overwrite 整体覆盖，mode=append 追加到末尾。"
+        "编辑已存在的纯文本文件。mode=overwrite 整体覆盖（会丢失原内容，"
+        "需显式传 confirm=true）；mode=append 追加到末尾。"
         "不支持二进制文件；文件不存在时报错（请用 createFile）。"
     )
     parameters = {
@@ -321,18 +431,29 @@ class EditFileTool(Tool):
                 "enum": ["overwrite", "append"],
                 "description": "overwrite 覆盖整体，append 追加末尾，默认 overwrite",
             },
+            "confirm": {
+                "type": "boolean",
+                "description": (
+                    "覆盖已有内容时必须显式置为 true，表示已知晓原内容会被丢弃。"
+                    "append 模式无需该参数。"
+                ),
+            },
         },
         "required": ["path", "content"],
         "additionalProperties": False,
     }
 
-    def run(self, path: str, content: str, mode: str = "overwrite") -> str:
+    def run(
+        self, path: str, content: str, mode: str = "overwrite", confirm: bool = False
+    ) -> str:
         if not (path or "").strip():
             return "编辑失败：path 不能为空。"
         if mode not in ("overwrite", "append"):
             return f"编辑失败：mode 只能是 overwrite 或 append，收到「{mode}」。"
 
-        target = _resolve(path)
+        target = _safe_resolve(path)
+        if isinstance(target, str):
+            return target
         if not target.exists():
             return f"编辑失败：文件不存在 {target}（如需新建请用 createFile）"
         if target.is_dir():
@@ -340,6 +461,21 @@ class EditFileTool(Tool):
 
         if _is_binary(target):
             return f"编辑失败：{target.name} 是二进制文件，editFile 只支持纯文本。"
+
+        # 覆盖写入是破坏性操作：原内容会整体丢失，必须显式确认
+        if (
+            mode == "overwrite"
+            and target.exists()
+            and target.stat().st_size > 0
+            and _REQUIRE_CONFIRM.get()
+            and not confirm
+        ):
+            return (
+                f"拒绝覆盖：{target} 已有内容（{_human_size(target.stat().st_size)}），"
+                "overwrite 会整体丢弃原内容。\n"
+                "若确认要覆盖，请在调用时传 confirm=true；"
+                "若只想追加，请用 mode=append。"
+            )
 
         try:
             if mode == "append":
@@ -371,7 +507,9 @@ class CreateDirTool(Tool):
     def run(self, path: str) -> str:
         if not (path or "").strip():
             return "创建目录失败：path 不能为空。"
-        target = _resolve(path)
+        target = _safe_resolve(path)
+        if isinstance(target, str):
+            return target
         if target.exists():
             if target.is_dir():
                 return f"目录已存在，无需创建：{target}"
@@ -381,6 +519,70 @@ class CreateDirTool(Tool):
         except OSError as exc:
             return f"创建目录失败：{exc}"
         return f"已创建目录：{target}"
+
+
+class RenamePathTool(Tool):
+    """重命名或移动文件 / 目录。
+
+    同一目录内改名即「重命名」，跨目录即「移动」，二者用同一个工具实现。
+    """
+
+    name = "renamePath"
+    description = (
+        "重命名或移动文件 / 目录。同目录改名即重命名，跨目录即移动。"
+        "目标已存在时报错，不会覆盖；如确需覆盖请先删除目标。"
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "source": {"type": "string", "description": "源路径（文件或目录）"},
+            "target": {"type": "string", "description": "目标路径（新名字或新位置）"},
+            "overwrite": {
+                "type": "boolean",
+                "description": "目标已存在时是否覆盖，默认 false",
+            },
+        },
+        "required": ["source", "target"],
+        "additionalProperties": False,
+    }
+
+    def run(self, source: str, target: str, overwrite: bool = False) -> str:
+        src = _safe_resolve(source)
+        if isinstance(src, str):
+            return src
+
+        dst = _safe_resolve(target)
+        if isinstance(dst, str):
+            return dst
+
+        if not src.exists():
+            return f"重命名失败：源路径不存在 {src}"
+        if src == dst:
+            return "重命名失败：源路径与目标路径相同"
+        if dst.exists():
+            if not overwrite:
+                return f"重命名失败：目标已存在 {dst}（如确需覆盖请传 overwrite=true）"
+            # 目标存在且要求覆盖：额外确认
+            if _REQUIRE_CONFIRM.get() and dst.is_dir():
+                return f"重命名失败：目标目录已存在 {dst}，不允许目录覆盖，请先删除"
+
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return f"重命名失败：无法创建目标父目录（{exc}）"
+
+        kind = "目录" if src.is_dir() else "文件"
+        try:
+            if dst.exists() and overwrite:
+                if dst.is_file():
+                    dst.unlink()
+            src.rename(dst)
+        except OSError as exc:
+            return f"重命名失败：{exc}"
+
+        same_dir = src.parent == dst.parent
+        action = "重命名" if same_dir else "移动"
+        return f"已{action}{kind}：{src.name} → {dst}"
 
 
 class DeleteDirTool(Tool):
@@ -399,7 +601,9 @@ class DeleteDirTool(Tool):
     def run(self, path: str) -> str:
         if not (path or "").strip():
             return "删除目录失败：path 不能为空。"
-        target = _resolve(path)
+        target = _safe_resolve(path)
+        if isinstance(target, str):
+            return target
         if not target.exists():
             return f"删除目录失败：路径不存在 {target}"
         if not target.is_dir():
@@ -431,7 +635,9 @@ class DeleteFileTool(Tool):
     def run(self, path: str) -> str:
         if not (path or "").strip():
             return "删除文件失败：path 不能为空。"
-        target = _resolve(path)
+        target = _safe_resolve(path)
+        if isinstance(target, str):
+            return target
         if not target.exists():
             return f"删除文件失败：文件不存在 {target}"
         if target.is_dir():
@@ -451,7 +657,33 @@ class DeleteFileTool(Tool):
 
 # 便捷：按默认配置构造全部工具
 def build_fs_tools(settings: FsSettings | None = None) -> list[Tool]:
+    """按配置构造全部文件系统工具。
+
+    沙箱策略：
+    - `allowed_roots` 为空 → 不限制（保持向后兼容，也便于单测）
+    - `allowed_roots` 非空 → 只允许这些目录，并按 include_cwd 决定是否加入 cwd
+
+    同时把确认策略写入上下文变量，供 editFile 等工具使用。
+    """
     s = settings or FsSettings()
+
+    explicit = _parse_roots(s.root_list)
+    if explicit:
+        roots = list(explicit)
+        if s.include_cwd:
+            try:
+                cwd = Path.cwd().resolve()
+                if cwd not in roots:
+                    roots.append(cwd)
+            except OSError:
+                pass
+        _ALLOWED_ROOTS.set(roots)
+    else:
+        # 未显式配置根目录：不做路径限制
+        _ALLOWED_ROOTS.set([])
+
+    _REQUIRE_CONFIRM.set(bool(s.require_confirm))
+
     return [
         GetCwdTool(),
         ListDirTool(s),
@@ -460,9 +692,15 @@ def build_fs_tools(settings: FsSettings | None = None) -> list[Tool]:
         CreateFileTool(),
         EditFileTool(),
         CreateDirTool(),
+        RenamePathTool(),
         DeleteDirTool(),
         DeleteFileTool(),
     ]
+
+
+def get_allowed_roots() -> list[Path]:
+    """当前生效的允许根目录（供测试与诊断）。"""
+    return list(_ALLOWED_ROOTS.get())
 
 
 __all__ = [
@@ -473,7 +711,11 @@ __all__ = [
     "CreateFileTool",
     "EditFileTool",
     "CreateDirTool",
+    "RenamePathTool",
     "DeleteDirTool",
     "DeleteFileTool",
+    "SandboxError",
     "build_fs_tools",
+    "get_allowed_roots",
+    "reset_sandbox",
 ]

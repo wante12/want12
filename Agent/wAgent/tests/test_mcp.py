@@ -91,10 +91,47 @@ def test_bad_url_rejected(tmp_path):
 
 
 def test_unsupported_transport_rejected(tmp_path):
-    write_config(tmp_path, {"a": {"type": "stdio", "url": "http://x/mcp"}})
+    # stdio 现已支持，这里用一个确实不支持的传输类型
+    write_config(tmp_path, {"a": {"type": "websocket", "url": "http://x/mcp"}})
     servers, issues = load_mcp_config(tmp_path)
     assert servers == []
     assert any("不支持的传输类型" in str(i) for i in issues)
+
+
+def test_stdio_config_parsed(tmp_path):
+    """stdio 配置应被正确识别为本地子进程传输。"""
+    write_config(
+        tmp_path,
+        {"local": {"command": "npx", "args": ["-y", "bazi-mcp"], "env": {"A": "1"}}},
+    )
+    servers, issues = load_mcp_config(tmp_path)
+    assert issues == []
+    assert len(servers) == 1
+    s = servers[0]
+    assert s.is_stdio
+    assert s.command == "npx"
+    assert s.args == ("-y", "bazi-mcp")
+    assert s.env == {"A": "1"}
+
+
+def test_stdio_inferred_from_command(tmp_path):
+    """未声明 type 时，有 command 即按 stdio 处理。"""
+    write_config(tmp_path, {"x": {"command": "python", "args": ["s.py"]}})
+    servers, _ = load_mcp_config(tmp_path)
+    assert servers[0].is_stdio
+
+
+def test_http_inferred_from_url(tmp_path):
+    write_config(tmp_path, {"x": {"url": "http://127.0.0.1:9999/mcp"}})
+    servers, _ = load_mcp_config(tmp_path)
+    assert not servers[0].is_stdio
+
+
+def test_stdio_missing_command(tmp_path):
+    write_config(tmp_path, {"x": {"type": "stdio"}})
+    servers, issues = load_mcp_config(tmp_path)
+    assert servers == []
+    assert any("command" in str(i) for i in issues)
 
 
 # ---------------------------------------------------------------- 工具结果整理

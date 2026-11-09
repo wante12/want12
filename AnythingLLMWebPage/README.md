@@ -22,15 +22,31 @@ AnythingLLMWebPage\
 
 ## 用到的接口
 
+所有接口都带 **`/api` 前缀**（`index.html` 里写的是 `${base()}/api/v1/...`）：
+
 | 步骤 | 接口 |
 |------|------|
-| 取第一个工作区 | `GET /v1/workspaces` → `workspaces[0].slug` |
-| 上传 | `POST /v1/document/upload`（multipart，字段名 `file`） |
-| 嵌入 | `POST /v1/workspace/{slug}/update-embeddings`，body `{"adds":[location]}` |
+| 取第一个工作区 | `GET /api/v1/workspaces` → `workspaces[0].slug` |
+| 上传 | `POST /api/v1/document/upload`（multipart，字段名 `file`） |
+| 嵌入 | `POST /api/v1/workspace/{slug}/update-embeddings`，body `{"adds":[location]}` |
 
 鉴权：`Authorization: Bearer <API Key>`。
 
 > 上传时**不要**手动设 `Content-Type`，让浏览器自动带 multipart `boundary`。
+
+## 错误提示策略
+
+页面**不会**把上游响应体回显到界面上。失败时只根据 HTTP 状态码给出可操作的提示，例如：
+
+| 状态码 | 页面提示 |
+|--------|----------|
+| 401 | API Key 无效或缺失，请在 AnythingLLM 开发者 API 页面重新生成 |
+| 404 | 接口或工作区不存在，请检查服务地址后缀与工作区标识 |
+| 413 | 文件太大，超过 AnythingLLM 的上传上限 |
+| 503 | 服务暂不可用，请确认 AnythingLLM 已启动 |
+
+这样既避免把内部路径、堆栈等信息暴露给普通用户，也让提示更容易照着处理。
+排查具体原因请看 AnythingLLM 服务端日志。
 
 ## 实测
 

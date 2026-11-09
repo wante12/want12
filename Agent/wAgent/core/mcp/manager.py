@@ -147,14 +147,14 @@ class McpManager:
                 tools = handle.list_tools()
             except McpConnectionError as exc:
                 self._statuses.append(
-                    McpServerStatus(server.name, server.url, False, error=str(exc))
+                    McpServerStatus(server.name, server.describe(), False, error=str(exc))
                 )
                 handle.close()
                 self._on_server_done()
                 continue
             except Exception as exc:  # noqa: BLE001 兜底，绝不影响启动
                 self._statuses.append(
-                    McpServerStatus(server.name, server.url, False, error=f"{type(exc).__name__}: {exc}")
+                    McpServerStatus(server.name, server.describe(), False, error=f"{type(exc).__name__}: {exc}")
                 )
                 handle.close()
                 self._on_server_done()
@@ -162,7 +162,7 @@ class McpManager:
 
             self._handles[server.name] = handle
             self._statuses.append(
-                McpServerStatus(server.name, server.url, True, tool_count=len(tools))
+                McpServerStatus(server.name, server.describe(), True, tool_count=len(tools))
             )
             discovered.extend(tools)
             self._publish_tools(tools)

@@ -25,15 +25,15 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 
 # 3) 启动 MCP
-.\.venv\Scripts\python.exe server.py   # 监听 127.0.0.1:8091
+.\.venv\Scripts\python.exe server.py   # 监听 127.0.0.1:8090
 ```
 
 | 端点 | 地址 |
 |------|------|
-| MCP | `http://127.0.0.1:8091/mcp` |
-| 健康检查 | `http://127.0.0.1:8091/health` |
+| MCP | `http://127.0.0.1:8090/mcp` |
+| 健康检查 | `http://127.0.0.1:8090/health` |
 
-环境变量：`MCP_PORT`（默认 8091）、`PET_HOSPITAL_BASE_URL`（默认 `http://127.0.0.1:8080`）。
+环境变量：`MCP_PORT`（默认 8090）、`PET_HOSPITAL_BASE_URL`（默认 `http://127.0.0.1:8080`）。
 
 ## 验证
 

@@ -19,9 +19,9 @@ D:\LLM-Course\
 | 1 | 宠物医院 REST | `PetHospitalServer\` | 网页 + 数据源 | 8080 |
 | 2 | 宠物医院 MCP | `PetHospitalMCP\` | 工具 `list_pets` | 8090 |
 | 3 | 八字 MCP | `BaziMCP\` | 3 个八字工具 | 8095 |
-| 4 | AnythingLLM MCP | `AnythingLLMMCP\` | 工具 `list_workspace_files` | 8093 |
+| 4 | AnythingLLM MCP | `AnythingLLMMCP\` | 工具 `list_workspace_files` `workspace_chat` `search_vectors` | 8093 |
 | 5 | 上传网页 | `AnythingLLMWebPage\` | `index.html` | — |
-| — | Agent | `Agent\wAgent\` | TUI + 本地工具 + MCP 客户端 | — |
+| — | Agent | `Agent\wAgent\` | TUI + 16 个本地工具 + MCP 客户端（HTTP/stdio） | — |
 
 两个宠物医院相关的 MCP 都是 **Streamable HTTP，无握手、无会话、无长连接**，
 同时兼容 **2026-07-28 之前（旧版 initialize）和之后（单次 POST + `_meta`）** 两套协议。
@@ -47,6 +47,25 @@ cd D:\office
 python D:\LLM-Course\Agent\wAgent\main.py
 ```
 
+> **关于 `D:\office`**：这是示例项目根目录，不是必须的路径。
+> wAgent 以**启动时的工作目录**作为项目根，并从该目录查找三样东西：
+>
+> | 文件 | 作用 | 缺失时 |
+> |------|------|--------|
+> | `.mcp.json` | MCP 服务器清单 | 跳过 MCP，只用本地工具 |
+> | `AGENTS.md` / `AGENT.md` | 项目约定指令 | 不注入项目指令 |
+> | `.agents/skills/` | Agent Skills 目录 | 无技能可加载 |
+>
+> 所以你可以换成任意目录，只要其中放好自己的 `.mcp.json` 即可。
+> 例如想直接在课程仓库里跑：
+>
+> ```powershell
+> cd D:\LLM-Course
+> python Agent\wAgent\main.py
+> ```
+>
+> 此时会读取 `D:\LLM-Course\.mcp.json`（若存在）。
+
 三者关闭窗口即停止。端口自查：
 
 ```powershell
@@ -56,6 +75,13 @@ foreach ($p in 8080,8090,8095) {
 ```
 
 > `.bat` 里全部使用英文：中文批处理在 `chcp 65001` 下容易解析出错，这是实测踩过的坑。
+
+---
+
+## 前置依赖
+
+部分模块需要外部依赖（课程提供的服务端二进制、运行中的 AnythingLLM）。
+这些依赖不随仓库分发，准备方法见 **[DEPENDENCIES.md](DEPENDENCIES.md)**。
 
 ---
 
@@ -72,7 +98,7 @@ cd D:\LLM-Course\PetHospitalServer
 
 ```powershell
 cd D:\LLM-Course\PetHospitalMCP
-.\.venv\Scripts\python.exe server.py    # 8091
+.\.venv\Scripts\python.exe server.py    # 8090
 .\.venv\Scripts\python.exe check.py     # 两套协议自检
 ```
 
@@ -114,7 +140,7 @@ Agent\
     ├── core\              业务内核（Agent / 工具 / LLM / 配置，零 UI 耦合）
     ├── tui\               Textual 界面（只消费 core 事件）
     ├── tests\             17 项自动化测试
-    ├── run_tui.py         TUI 启动入口
+    ├── main.py            TUI 启动入口
     └── README.md          架构说明与 Web/Desktop 扩展点
 ```
 
@@ -125,8 +151,8 @@ Agent\
 ```powershell
 cd D:\LLM-Course\Agent\wAgent
 python -m pip install -r requirements.txt
-python run_tui.py            # Textual 终端界面
-python -m pytest -q          # 17 passed
+python main.py               # Textual 终端界面
+python -m pytest -q          # 全量自动化测试
 ```
 
 快捷键：`Enter` 发送 · `Ctrl+R` 重置对话 · `Ctrl+L` 清屏 · `Ctrl+C` 退出。

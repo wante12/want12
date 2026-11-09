@@ -8,16 +8,21 @@
 
 启动：
     pip install -r requirements.txt
-    python server.py                      # 默认 127.0.0.1:8091
+    python server.py                      # 默认 127.0.0.1:8090
 
 环境变量：
-    MCP_PORT                默认 8091
+    MCP_PORT                默认 8090
     PET_HOSPITAL_BASE_URL   默认 http://127.0.0.1:8080
 """
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import sys
+import time
+from datetime import datetime
 from typing import Any, Literal
 
 import httpx
@@ -28,7 +33,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 BASE_URL = os.environ.get("PET_HOSPITAL_BASE_URL", "http://127.0.0.1:8080").rstrip("/")
-PORT = int(os.environ.get("MCP_PORT", "8091"))
+PORT = int(os.environ.get("MCP_PORT", "8090"))
+#: 后端请求的重试次数（含首次），可用环境变量调整
+try:
+    MAX_RETRIES = max(1, int(os.environ.get("PET_HOSPITAL_RETRIES", "3")))
+except ValueError:
+    MAX_RETRIES = 3
 
 SPECIES = ("犬", "猫", "兔", "鸟", "仓鼠", "爬宠", "其他")
 STATUS = ("待就诊", "就诊中", "住院中", "已康复", "慢性病随访")
@@ -83,18 +93,19 @@ async def list_pets(
     }.items() if v is not None}
 
     try:
-        async with httpx.AsyncClient(base_url=BASE_URL, timeout=10.0) as c:
-            r = await c.get("/api/v1/pets", params=params)
-    except httpx.TimeoutException:
-        return _err("BACKEND_TIMEOUT", "宠物医院服务端响应超时")
-    except httpx.RequestError:
-        return _err("BACKEND_UNAVAILABLE", f"无法连接 {BASE_URL}，请先启动 pethospital.exe")
+        status_code, body = await _request_with_retry(
+            "GET", "/api/v1/pets", tool="list_pets", params=params
+        )
+    except RuntimeError as exc:
+        return exc.args[0] if exc.args else _err("INTERNAL_ERROR", str(exc))
 
-    if r.status_code >= 400:
-        return _err("BACKEND_API_ERROR", f"后端返回 HTTP {r.status_code}", {"body": r.text[:300]})
-    try:
-        body = r.json()
-    except ValueError:
+    if status_code >= 400:
+        return _err(
+            "BACKEND_API_ERROR",
+            f"后端返回 HTTP {status_code}",
+            {"body": (body if isinstance(body, str) else str(body))[:300]},
+        )
+    if not isinstance(body, dict):
         return _err("BACKEND_INVALID_RESPONSE", "后端返回的不是 JSON")
     if body.get("code") not in (None, 200) or "data" not in body:
         return _err("BACKEND_API_ERROR", body.get("message", "后端业务错误"))
@@ -105,6 +116,95 @@ async def list_pets(
         it["records"] = it.get("records") or []
         it["charges"] = it.get("charges") or []
     return data
+
+
+# ====================================================================== 请求封装
+#: 可重试的状态码（服务端临时故障）
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+#: 退避基数（秒）
+BACKOFF_BASE = 0.4
+
+
+def _log(event: str, **fields: Any) -> None:
+    """结构化日志：每行一条 JSON，便于采集与检索。"""
+    record = {
+        "ts": datetime.now().isoformat(timespec="milliseconds"),
+        "event": event,
+        **fields,
+    }
+    print(json.dumps(record, ensure_ascii=False), file=sys.stderr, flush=True)
+
+
+async def _request_with_retry(
+    method: str,
+    path: str,
+    *,
+    tool: str,
+    params: dict | None = None,
+    json_body: dict | None = None,
+) -> tuple[int, Any]:
+    """带重试与结构化日志的 HTTP 请求。
+
+    返回 (status_code, body)。body 为解析后的 JSON 或原始文本。
+    连接失败 / 超时 / 可重试状态码都会重试；最终仍失败则抛 RuntimeError(err_dict)。
+    """
+    started = time.perf_counter()
+    last_error = ""
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(base_url=BASE_URL, timeout=10.0) as c:
+                r = await c.request(method, path, params=params, json=json_body)
+            elapsed = round((time.perf_counter() - started) * 1000, 1)
+
+            if r.status_code in RETRYABLE_STATUS and attempt < MAX_RETRIES:
+                last_error = f"HTTP {r.status_code}"
+                _log("backend_retry", tool=tool, path=path, attempt=attempt,
+                     status=r.status_code, elapsed_ms=elapsed, reason=last_error)
+                await asyncio.sleep(BACKOFF_BASE * (2 ** (attempt - 1)))
+                continue
+
+            try:
+                body = r.json()
+            except ValueError:
+                body = r.text
+
+            _log(
+                "backend_ok" if r.status_code < 400 else "backend_error",
+                tool=tool, path=path, attempt=attempt,
+                status=r.status_code, elapsed_ms=elapsed,
+            )
+            return r.status_code, body
+
+        except httpx.TimeoutException:
+            last_error = "timeout"
+            _log("backend_retry", tool=tool, path=path, attempt=attempt,
+                 elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
+                 reason=last_error)
+        except httpx.RequestError as exc:
+            last_error = type(exc).__name__
+            _log("backend_retry", tool=tool, path=path, attempt=attempt,
+                 elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
+                 reason=last_error)
+
+        if attempt < MAX_RETRIES:
+            await asyncio.sleep(BACKOFF_BASE * (2 ** (attempt - 1)))
+
+    elapsed = round((time.perf_counter() - started) * 1000, 1)
+    _log("backend_failed", tool=tool, path=path, attempts=MAX_RETRIES,
+         elapsed_ms=elapsed, reason=last_error)
+
+    if last_error == "timeout":
+        raise RuntimeError(
+            _err("BACKEND_TIMEOUT", f"宠物医院服务端响应超时（已重试 {MAX_RETRIES} 次）")
+        )
+    raise RuntimeError(
+        _err(
+            "BACKEND_UNAVAILABLE",
+            f"无法连接 {BASE_URL}（已重试 {MAX_RETRIES} 次），请先启动 pethospital.exe",
+            {"lastError": last_error},
+        )
+    )
 
 
 def _err(code: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
